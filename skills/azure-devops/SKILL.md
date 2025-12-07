@@ -1,5 +1,9 @@
 # Azure DevOps Integration Skill
 
+
+**STOP** - If you haven't read this entire file, read it now before proceeding.
+ Do NOT use general knowledge about Azure DevOps CLI. Follow these specific instructions.
+
 Integrate with Azure DevOps for work item management, repository operations, and pipeline monitoring using the Azure CLI.
 
 ## When to Use
