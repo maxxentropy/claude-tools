@@ -1,116 +1,73 @@
-# Installation Guide
+# Installation
 
 ## Prerequisites
 
-- macOS (tested on Sequoia)
+- macOS/Linux (or WSL on Windows)
 - Claude Code installed
-- Python 3.9+ (for helper scripts)
+- Python 3.9+ (for scripts)
 
-## Step-by-Step Setup
+## Setup
 
-### 1. Place the Tools Repo
-
-Move or copy the `claude-tools` folder (the `skills/` directory and its contents) to your source directory:
+### 1. Clone Repository
 
 ```bash
-mv ~/Downloads/claude-tools ~/source/claude-tools
-```
-
-Or wherever you keep your git repos. The key is this becomes a git repo you can version control.
-
-### 2. Initialize Git
-
-```bash
+git clone https://github.com/YOUR_USERNAME/claude-tools.git ~/source/claude-tools
 cd ~/source/claude-tools
-git init
-git add .
-git commit -m "Initial commit: claude-tools skills library"
 ```
 
-Optionally push to GitHub:
-```bash
-git remote add origin git@github.com:YOUR_USERNAME/claude-tools.git
-git push -u origin main
-```
-
-### 3. Create Symlink in ~/.claude/
-
-This makes the skills accessible to Claude Code:
+### 2. Create Symlinks
 
 ```bash
+# Link skills directory
 ln -s ~/source/claude-tools/skills ~/.claude/skills
+
+# Link global CLAUDE.md
+ln -s ~/source/claude-tools/CLAUDE.md ~/CLAUDE.md
 ```
 
-Verify:
+### 3. Make Scripts Executable
+
+```bash
+find ~/.claude/skills -name "*.py" -exec chmod +x {} \;
+```
+
+### 4. Verify
+
 ```bash
 ls -la ~/.claude/skills
-# Should show: skills -> /Users/YOUR_USER/source/claude-tools/skills
+# Should show: skills -> ~/source/claude-tools/skills
+
+cat ~/CLAUDE.md
+# Should show the global configuration
 ```
 
-### 4. Install Global CLAUDE.md
+## Test
 
-Copy the global CLAUDE.md to your home directory:
-
-```bash
-cp ~/source/claude-tools/CLAUDE.md ~/CLAUDE.md
-```
-
-This file will be inherited by all projects under your home directory.
-
-### 5. Verify Setup
-
-Your structure should now look like:
-
-```
-~/
-├── CLAUDE.md                           # Global instructions
-├── .claude/
-│   ├── settings.json                   # Existing Claude Code config
-│   └── skills -> ~/source/claude-tools/skills  # Symlink
-└── source/
-    ├── claude-tools/                   # This repo
-    │   ├── skills/
-    │   │   └── docgen/
-    │   └── ...
-    └── your-other-projects/
-```
-
-## Testing
-
-Open Claude Code in any project directory:
+Open Claude Code in any project:
 
 ```bash
 cd ~/source/some-project
 claude
 ```
 
-Then ask:
-```
-What skills do you have access to?
-```
+Ask: "What skills do you have access to?"
 
-Claude should reference the skills from `~/.claude/skills/`.
-
-## Troubleshooting
-
-### Claude doesn't see the skills
-
-1. Check the symlink exists: `ls -la ~/.claude/skills`
-2. Check ~/CLAUDE.md exists and references the skills
-3. Restart Claude Code
-
-### Scripts don't run
-
-1. Make scripts executable: `chmod +x ~/.claude/skills/docgen/scripts/*.py`
-2. Ensure Python 3 is in your PATH
-
-## Updating Skills
-
-Since this is a git repo, you can:
+## Updating
 
 ```bash
 cd ~/source/claude-tools
-git pull  # If you pushed to remote
+git pull
 ```
 
 The symlink means Claude Code immediately sees updates.
+
+## Troubleshooting
+
+### Claude doesn't see skills
+1. Check symlink: `ls -la ~/.claude/skills`
+2. Check CLAUDE.md: `cat ~/CLAUDE.md`
+3. Restart Claude Code
+
+### Scripts don't run
+1. Make executable: `chmod +x path/to/script.py`
+2. Check Python: `python3 --version`

@@ -1,77 +1,99 @@
 # Claude Tools
 
-Reusable skills and utilities for Claude Code.
+Reusable skills for Claude Code.
+
+## Quick Start
+
+```bash
+# Clone repo
+git clone https://github.com/YOUR_USERNAME/claude-tools.git ~/source/claude-tools
+
+# Create symlinks
+ln -s ~/source/claude-tools/skills ~/.claude/skills
+ln -s ~/source/claude-tools/CLAUDE.md ~/CLAUDE.md
+```
 
 ## Structure
 
 ```
 claude-tools/
-├── CLAUDE.md                    # Global config (symlink to ~/CLAUDE.md)
-├── bin/
-│   └── claude-skills            # Skill management helper
+├── CLAUDE.md                    # Global configuration
+├── README.md
 └── skills/
-    ├── docgen/                  # Documentation generator
+    ├── docgen/                  # .NET documentation generator
+    │   ├── SKILL.md
+    │   ├── scripts/
+    │   └── references/
     ├── azure-devops/            # Azure DevOps integration
-    └── wsr-generator/           # Weekly status reports
-```
-
-## Installation
-
-```bash
-# Symlink skills directory (if not already done)
-ln -sf ~/source/claude-tools/skills ~/.claude/skills
-
-# Symlink global CLAUDE.md
-ln -sf ~/source/claude-tools/CLAUDE.md ~/CLAUDE.md
-
-# Add helper to PATH (optional)
-mkdir -p ~/bin
-ln -sf ~/source/claude-tools/bin/claude-skills ~/bin/claude-skills
-```
-
-### Verify
-
-```bash
-claude-skills check
+    │   ├── SKILL.md
+    │   └── scripts/
+    ├── wsr-generator/           # Weekly status reports
+    │   ├── SKILL.md
+    │   ├── scripts/
+    │   └── assets/
+    └── ui-design-team/          # Cross-platform UI design
+        ├── SKILL.md
+        ├── references/
+        └── assets/
 ```
 
 ## Skills
 
-| Skill | Triggers | Purpose |
-|-------|----------|---------|
-| docgen | `generate docs`, `document this` | Generate .NET documentation |
-| azure-devops | `ado`, `work item`, `pipeline` | Azure DevOps integration |
-| wsr-generator | `wsr`, `dostatus`, `weekly report` | Weekly status reports |
+### docgen
+Generate documentation for .NET codebases: architecture diagrams, API references, domain models.
 
-### Documentation Generator (`docgen`)
-Generate comprehensive documentation for .NET codebases including architecture diagrams, API references, domain models, and getting started guides.
+**Triggers**: `generate docs`, `document this`, `create documentation`
 
-### Azure DevOps (`azure-devops`)
-Integrate with Azure DevOps for work item management, queries, and pipeline operations. Requires Azure CLI with devops extension.
+### azure-devops
+Work item management, pipeline monitoring, repository operations via Azure CLI.
 
-### WSR Generator (`wsr-generator`)
-Generate weekly status report entries from git history and ADO activity. Correlates commits to work items and formats output per your WSR template. Depends on azure-devops skill.
+**Triggers**: `ado`, `azure devops`, `work item`, `pipeline`
 
-## Helper Commands
+**Requires**: Azure CLI with devops extension, `az login`
 
-```bash
-claude-skills list              # List installed skills
-claude-skills check             # Verify installations  
-claude-skills info <skill>      # Show skill details
-claude-skills triggers          # List all trigger words
+### wsr-generator
+Generate weekly status reports from git history and Azure DevOps activity.
+
+**Triggers**: `wsr`, `dostatus`, `weekly report`, `status entry`
+
+**Requires**: azure-devops skill configured, git repository
+
+### ui-design-team
+Cross-platform UI design and implementation specialists for Web (HTML/CSS), XAML (WPF/WinUI/MAUI), Blazor, and Python GUI.
+
+**Triggers**: `UI design`, `color scheme`, `layout`, `component styling`, `XAML`, `Blazor components`
+
+## Skill Anatomy
+
+Each skill follows the standard structure:
+
+```
+skill-name/
+├── SKILL.md          # Required: Instructions with YAML frontmatter
+├── scripts/          # Optional: Executable Python/Bash scripts
+├── references/       # Optional: Documentation loaded on-demand
+└── assets/           # Optional: Templates, files for output
 ```
 
-## Adding New Skills
+### YAML Frontmatter (Required)
 
-1. Create folder: `skills/{skill-name}/`
-2. Add `SKILL.md` with workflow instructions
-3. Add `scripts/`, `templates/` as needed
-4. Update `CLAUDE.md` Skills Registry table
-5. Run `claude-skills check`
+```yaml
+---
+name: skill-name
+description: |
+  What the skill does and WHEN to use it.
+  Include trigger words - this is what Claude reads to decide activation.
+---
+```
+
+## Adding Skills
+
+1. Create `skills/{name}/SKILL.md` with frontmatter
+2. Add scripts, references, assets as needed
+3. Skills auto-register via frontmatter description
 
 ## Design Principles
 
-- **Skills provide infrastructure, Claude does reasoning** - Scripts output JSON, Claude interprets
-- **No API costs** - Uses Claude Pro subscription via Claude Code  
-- **Per-repo configuration** - Skills adapt to different projects
-- **Read SKILL.md first** - Claude must read instructions before acting
+- **Skills provide infrastructure, Claude does reasoning**: Scripts output JSON, Claude interprets
+- **Progressive disclosure**: SKILL.md loads always, references load on-demand
+- **Concise is key**: Only include what Claude doesn't already know
