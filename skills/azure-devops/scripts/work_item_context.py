@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from work_item_index import WorkItemIndexManager, WorkItem
 
@@ -50,6 +50,7 @@ class WorkItemContext:
     branch_name: Optional[str]
     confidence: float  # 0.0 to 1.0
     raw_match: Optional[str]  # The actual matched pattern
+    suggested_area: Optional[str] = None  # Suggested ADO area path
 
     @property
     def has_context(self) -> bool:
@@ -64,7 +65,8 @@ class WorkItemContext:
             "source": self.source.value,
             "branch_name": self.branch_name,
             "confidence": self.confidence,
-            "raw_match": self.raw_match
+            "raw_match": self.raw_match,
+            "suggested_area": self.suggested_area
         }
 
 
@@ -251,22 +253,242 @@ class GitContext:
         except Exception:
             return False
 
+    @staticmethod
+    def get_repo_root() -> Optional[str]:
+        """Get the root directory of the git repository."""
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                cwd=os.getcwd()
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+            return None
+        except Exception:
+            return None
+
+    @staticmethod
+    def get_changed_files() -> List[str]:
+        """Get list of changed files in working directory."""
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--name-only", "HEAD"],
+                capture_output=True,
+                text=True,
+                cwd=os.getcwd()
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip().split('\n')
+            return []
+        except Exception:
+            return []
+
+
+class AreaSuggester:
+    """Suggests ADO area based on code context."""
+
+    # Common source directories
+    SOURCE_DIRS = {'src', 'lib', 'packages', 'apps', 'services', 'modules'}
+
+    # Known category mappings (lowercase -> category)
+    CATEGORY_MAPPINGS = {
+        # Platform
+        'auth': 'Platform', 'authentication': 'Platform', 'authorization': 'Platform',
+        'identity': 'Platform', 'security': 'Platform', 'infrastructure': 'Platform',
+        'common': 'Platform', 'shared': 'Platform', 'core': 'Platform',
+        'logging': 'Platform', 'monitoring': 'Platform', 'telemetry': 'Platform',
+
+        # Integrations
+        'integration': 'Integrations', 'integrations': 'Integrations',
+        'gateway': 'Integrations', 'connector': 'Integrations', 'connectors': 'Integrations',
+        'external': 'Integrations', 'api': 'Integrations', 'apis': 'Integrations',
+
+        # Clients
+        'web': 'Clients', 'mobile': 'Clients', 'desktop': 'Clients',
+        'cli': 'Clients', 'frontend': 'Clients', 'ui': 'Clients', 'client': 'Clients',
+
+        # Operations
+        'devops': 'Operations', 'deployment': 'Operations', 'deploy': 'Operations',
+        'ops': 'Operations', 'operations': 'Operations',
+    }
+
+    def __init__(self, config_path: str = ".ado/config.json"):
+        self.config_path = config_path
+        self.config = self._load_config()
+
+    def _load_config(self) -> dict:
+        """Load ADO configuration."""
+        try:
+            return json.loads(Path(self.config_path).read_text())
+        except Exception:
+            return {}
+
+    def suggest_from_cwd(self) -> Optional[str]:
+        """Suggest area based on current working directory."""
+        repo_root = GitContext.get_repo_root()
+        if not repo_root:
+            return None
+
+        cwd = os.getcwd()
+        try:
+            rel_path = Path(cwd).relative_to(repo_root)
+            return self._suggest_from_path(str(rel_path))
+        except ValueError:
+            return None
+
+    def suggest_from_branch(self, branch_name: str) -> Optional[str]:
+        """Suggest area based on branch name."""
+        if not branch_name:
+            return None
+
+        # Extract component hint from branch
+        # e.g., feature/orders/AB#1234-fix -> Orders
+        # e.g., fix/auth-token-refresh -> Auth (-> Platform\Authentication)
+
+        parts = branch_name.lower().replace('\\', '/').split('/')
+
+        for part in parts:
+            # Skip common prefixes
+            if part in {'feature', 'fix', 'bugfix', 'hotfix', 'release', 'user'}:
+                continue
+
+            # Skip work item references
+            if re.match(r'^(ab#)?\d+', part):
+                continue
+
+            # Try to extract component name
+            # Remove trailing description after work item
+            component = re.sub(r'-.*$', '', part)
+            component = re.sub(r'^(ab#)?\d+[-_]?', '', component)
+
+            if component and len(component) > 2:
+                return self._suggest_area_for_component(component)
+
+        return None
+
+    def suggest_from_changed_files(self) -> Optional[str]:
+        """Suggest area based on changed files."""
+        changed_files = GitContext.get_changed_files()
+        if not changed_files:
+            return None
+
+        # Find common path prefix
+        if len(changed_files) == 1:
+            return self._suggest_from_path(changed_files[0])
+
+        # Find most common component directory
+        components: Dict[str, int] = {}
+        for file_path in changed_files:
+            suggestion = self._suggest_from_path(file_path)
+            if suggestion:
+                components[suggestion] = components.get(suggestion, 0) + 1
+
+        if components:
+            # Return most common
+            return max(components.keys(), key=lambda k: components[k])
+
+        return None
+
+    def _suggest_from_path(self, rel_path: str) -> Optional[str]:
+        """Suggest area from a relative file path."""
+        parts = Path(rel_path).parts
+
+        # Skip source directory prefixes
+        meaningful_parts = []
+        skip_next = False
+
+        for part in parts:
+            if skip_next:
+                skip_next = False
+                continue
+
+            part_lower = part.lower()
+
+            # Skip common non-component directories
+            if part_lower in self.SOURCE_DIRS:
+                continue
+            if part.startswith('.') or part.startswith('_'):
+                continue
+            if part_lower in {'test', 'tests', 'spec', 'specs', '__pycache__'}:
+                continue
+
+            meaningful_parts.append(part)
+
+            # Usually first meaningful part is the component
+            if len(meaningful_parts) >= 1:
+                break
+
+        if meaningful_parts:
+            component = meaningful_parts[0]
+            return self._suggest_area_for_component(component)
+
+        return None
+
+    def _suggest_area_for_component(self, component: str) -> str:
+        """Generate area path for a component name."""
+        project_name = self.config.get('project', '')
+        component_lower = component.lower()
+
+        # Clean up component name
+        clean_name = re.sub(r'[-_]', '', component)
+        clean_name = clean_name[0].upper() + clean_name[1:] if clean_name else component
+
+        # Determine category
+        category = self.CATEGORY_MAPPINGS.get(component_lower, 'Core')
+
+        if project_name:
+            return f"{project_name}\\{category}\\{clean_name}"
+        return f"{category}\\{clean_name}"
+
+    def suggest(self) -> Optional[str]:
+        """
+        Get best area suggestion using all available signals.
+
+        Priority:
+        1. Changed files (most specific)
+        2. Current directory
+        3. Branch name
+        """
+        # Try changed files first
+        suggestion = self.suggest_from_changed_files()
+        if suggestion:
+            return suggestion
+
+        # Try current directory
+        suggestion = self.suggest_from_cwd()
+        if suggestion:
+            return suggestion
+
+        # Try branch name
+        branch = GitContext.get_current_branch()
+        if branch:
+            suggestion = self.suggest_from_branch(branch)
+            if suggestion:
+                return suggestion
+
+        return None
+
 
 class WorkItemContextDetector:
     """Detects work item context from various sources."""
 
     ENV_VAR_WORK_ITEM = "ADO_WORK_ITEM_ID"
 
-    def __init__(self, index_manager: Optional[WorkItemIndexManager] = None):
+    def __init__(self, index_manager: Optional[WorkItemIndexManager] = None,
+                 config_path: str = ".ado/config.json"):
         """
         Initialize context detector.
 
         Args:
             index_manager: Optional WorkItemIndexManager for lookups
+            config_path: Path to ADO config for area suggestions
         """
         self.index_manager = index_manager or WorkItemIndexManager()
+        self.area_suggester = AreaSuggester(config_path)
 
-    def detect(self) -> WorkItemContext:
+    def detect(self, include_area_suggestion: bool = True) -> WorkItemContext:
         """
         Detect current work item context.
 
@@ -276,10 +498,18 @@ class WorkItemContextDetector:
         3. Branch name parsing
         4. Recent commit messages
 
+        Args:
+            include_area_suggestion: Whether to include area suggestion in context
+
         Returns:
             WorkItemContext with detected context
         """
         branch_name = GitContext.get_current_branch()
+
+        # Get area suggestion if requested
+        suggested_area = None
+        if include_area_suggestion:
+            suggested_area = self.area_suggester.suggest()
 
         # 1. Check environment variable
         env_id = os.environ.get(self.ENV_VAR_WORK_ITEM)
@@ -287,13 +517,16 @@ class WorkItemContextDetector:
             try:
                 work_item_id = int(env_id)
                 work_item = self.index_manager.get_work_item(work_item_id)
+                # Use work item's area if available, otherwise use suggestion
+                area = work_item.area_path if work_item and work_item.area_path else suggested_area
                 return WorkItemContext(
                     work_item_id=work_item_id,
                     work_item=work_item,
                     source=ContextSource.ENVIRONMENT,
                     branch_name=branch_name,
                     confidence=1.0,
-                    raw_match=env_id
+                    raw_match=env_id,
+                    suggested_area=area
                 )
             except ValueError:
                 pass
@@ -302,13 +535,15 @@ class WorkItemContextDetector:
         if branch_name:
             work_item = self.index_manager.get_work_item_for_branch(branch_name)
             if work_item:
+                area = work_item.area_path if work_item.area_path else suggested_area
                 return WorkItemContext(
                     work_item_id=work_item.id,
                     work_item=work_item,
                     source=ContextSource.INDEX_MAPPING,
                     branch_name=branch_name,
                     confidence=1.0,
-                    raw_match=branch_name
+                    raw_match=branch_name,
+                    suggested_area=area
                 )
 
         # 3. Parse branch name
@@ -316,13 +551,15 @@ class WorkItemContextDetector:
             work_item_id, confidence, raw_match = BranchParser.parse(branch_name)
             if work_item_id:
                 work_item = self.index_manager.get_work_item(work_item_id)
+                area = work_item.area_path if work_item and work_item.area_path else suggested_area
                 return WorkItemContext(
                     work_item_id=work_item_id,
                     work_item=work_item,
                     source=ContextSource.BRANCH_NAME,
                     branch_name=branch_name,
                     confidence=confidence,
-                    raw_match=raw_match
+                    raw_match=raw_match,
+                    suggested_area=area
                 )
 
         # 4. Check recent commits
@@ -332,13 +569,15 @@ class WorkItemContextDetector:
             if refs:
                 work_item_id, confidence, raw_match = refs[0]  # Take first match
                 work_item = self.index_manager.get_work_item(work_item_id)
+                area = work_item.area_path if work_item and work_item.area_path else suggested_area
                 return WorkItemContext(
                     work_item_id=work_item_id,
                     work_item=work_item,
                     source=ContextSource.COMMIT_MESSAGE,
                     branch_name=branch_name,
                     confidence=confidence * 0.8,  # Reduce confidence for commit-based detection
-                    raw_match=raw_match
+                    raw_match=raw_match,
+                    suggested_area=area
                 )
 
         # No context found
@@ -348,7 +587,8 @@ class WorkItemContextDetector:
             source=ContextSource.NONE,
             branch_name=branch_name,
             confidence=0.0,
-            raw_match=None
+            raw_match=None,
+            suggested_area=suggested_area
         )
 
     def set_context(self, work_item_id: int, link_to_branch: bool = True) -> WorkItemContext:
@@ -495,15 +735,21 @@ def format_context_summary(context: WorkItemContext) -> str:
             lines.append(f"  Type: {context.work_item.work_item_type}")
             if context.work_item.assigned_to:
                 lines.append(f"  Assigned: {context.work_item.assigned_to}")
+            if context.work_item.area_path:
+                lines.append(f"  Area: {context.work_item.area_path}")
         lines.append(f"  Source: {context.source.value}")
         lines.append(f"  Confidence: {context.confidence:.0%}")
         if context.branch_name:
             lines.append(f"  Branch: {context.branch_name}")
+        if context.suggested_area and not (context.work_item and context.work_item.area_path):
+            lines.append(f"  Suggested Area: {context.suggested_area}")
     else:
         lines.append("No work item context detected")
         if context.branch_name:
             lines.append(f"  Current branch: {context.branch_name}")
             lines.append("  Tip: Use 'AB#1234' in branch name or set manually")
+        if context.suggested_area:
+            lines.append(f"  Suggested Area: {context.suggested_area}")
 
     return "\n".join(lines)
 
@@ -518,6 +764,8 @@ def format_existence_check_summary(check_result: dict) -> str:
         if context.branch_name:
             lines.append(f"  Current branch: {context.branch_name}")
             lines.append("  Tip: Use 'AB#1234' in branch name or set manually")
+        if context.suggested_area:
+            lines.append(f"  Suggested Area: {context.suggested_area}")
         return "\n".join(lines)
 
     lines.append(f"Work Item: AB#{context.work_item_id}")
@@ -530,6 +778,8 @@ def format_existence_check_summary(check_result: dict) -> str:
             lines.append(f"  Type: {context.work_item.work_item_type}")
             if context.work_item.assigned_to:
                 lines.append(f"  Assigned: {context.work_item.assigned_to}")
+            if context.work_item.area_path:
+                lines.append(f"  Area: {context.work_item.area_path}")
         lines.append(f"  Status: EXISTS (cached)")
     elif check_result["exists_in_ado"]:
         # Item exists in ADO but not cached
@@ -543,6 +793,8 @@ def format_existence_check_summary(check_result: dict) -> str:
             lines.append(f"    Suggested title: {check_result['suggested_title']}")
         if check_result["suggested_type"]:
             lines.append(f"    Suggested type: {check_result['suggested_type']}")
+        if context.suggested_area:
+            lines.append(f"    Suggested area: {context.suggested_area}")
         lines.append("")
         lines.append("  To create, run:")
         lines.append(f"    python3 work_item_context.py --create-from-branch")
@@ -553,6 +805,8 @@ def format_existence_check_summary(check_result: dict) -> str:
     lines.append(f"  Confidence: {context.confidence:.0%}")
     if context.branch_name:
         lines.append(f"  Branch: {context.branch_name}")
+    if context.suggested_area and not (context.work_item and context.work_item.area_path):
+        lines.append(f"  Suggested Area: {context.suggested_area}")
 
     return "\n".join(lines)
 
@@ -562,10 +816,19 @@ def create_work_item_from_context(
     work_item_id: int,
     title: str,
     work_item_type: str,
-    description: Optional[str] = None
+    description: Optional[str] = None,
+    area_path: Optional[str] = None
 ) -> Optional[dict]:
     """
     Create a work item in ADO.
+
+    Args:
+        config_path: Path to ADO config file
+        work_item_id: Work item ID (for reference, not used in creation)
+        title: Work item title
+        work_item_type: Type (Task, Bug, User Story, etc.)
+        description: Optional description
+        area_path: Optional area path to assign
 
     Returns the created work item dict or None on failure.
     """
@@ -585,6 +848,9 @@ def create_work_item_from_context(
 
         if description:
             cmd.extend(["--description", description])
+
+        if area_path:
+            cmd.extend(["--area", area_path])
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
@@ -607,9 +873,10 @@ def main():
         description="Detect work item context from git branch/commits",
         epilog="""
 Examples:
-  %(prog)s                          # Detect context from current branch
+  %(prog)s                          # Detect context (includes suggested area)
   %(prog)s --check                  # Detect and verify work item exists
-  %(prog)s --create-from-branch     # Create work item if it doesn't exist
+  %(prog)s --create-from-branch     # Create with auto-suggested area
+  %(prog)s --create-from-branch --area "Project\\Core"  # Override area
   %(prog)s --set 1234               # Manually set context to work item
   %(prog)s --suggest-branch 1234    # Suggest branch name for work item
         """
@@ -629,6 +896,8 @@ Examples:
                        help="Override type when creating (Task, Bug, User Story)")
     parser.add_argument("--yes", "-y", action="store_true",
                        help="Skip confirmation when creating")
+    parser.add_argument("--area", type=str,
+                       help="Override area path when creating (with --create-from-branch)")
     parser.add_argument("--suggest-branch", type=int, metavar="ID",
                        help="Suggest branch name for work item")
     parser.add_argument("--parse-branch", type=str, metavar="NAME",
@@ -720,12 +989,15 @@ Examples:
             # Prepare creation details
             title = args.title or check_result["suggested_title"] or "New Work Item"
             work_type = args.work_type or check_result["suggested_type"] or "Task"
+            area = args.area or context.suggested_area
 
             print(f"Work item AB#{context.work_item_id} does not exist.")
             print("")
             print("Create new work item?")
             print(f"  Title: {title}")
             print(f"  Type: {work_type}")
+            if area:
+                print(f"  Area: {area}")
             print(f"  Branch: {context.branch_name}")
             print("")
 
@@ -745,7 +1017,8 @@ Examples:
                 args.config,
                 context.work_item_id,
                 title,
-                work_type
+                work_type,
+                area_path=area
             )
 
             if created:
@@ -759,6 +1032,7 @@ Examples:
                     state=created.get("fields", {}).get("System.State", "New"),
                     work_item_type=work_type,
                     assigned_to=None,
+                    area_path=area,
                     url=created.get("url"),
                     last_fetched=datetime.utcnow()
                 )

@@ -338,7 +338,9 @@ az repos list --org "$ORG" --project "$PROJECT" --output table
 | `discover-project.py` | Scan project | Areas, iterations, teams, pipelines |
 | `sync_work_items.py` | Sync to local index | Incremental/full sync, staleness detection |
 | `work_item_index.py` | Local index management | Cache storage, search, branch mapping |
-| `work_item_context.py` | Context detection | Branch parsing, commit parsing, auto-detection |
+| `work_item_context.py` | Context detection | Branch parsing, commit parsing, auto-detection, **area suggestion** |
+| `area_analyzer.py` | Codebase analysis | Component detection, architecture patterns |
+| `area_advisor.py` | Area recommendations | Compare code vs ADO areas, anti-patterns, health scores |
 
 ### ado_client.py Features
 
@@ -690,6 +692,168 @@ The metadata file contains the complete field schema for your project:
 If fields change (new custom fields, process template updates), re-run discovery:
 ```bash
 python3 skills/azure-devops/scripts/discover-project.py --config .ado/config.json --output .ado/project-metadata.json
+```
+
+## Area Management & Suggestions
+
+The area management system helps you organize work items by automatically suggesting appropriate area paths based on code context, and analyzing your ADO area structure for improvements.
+
+### Area Suggestion (Automatic)
+
+When detecting work item context or creating work items, the system automatically suggests an area path based on:
+
+1. **Changed files** (highest priority) - Analyzes git diff to identify which component you're working in
+2. **Current directory** - Infers component from your location in the codebase
+3. **Branch name** - Extracts component hints from branch naming patterns
+
+**See suggested area in context detection:**
+```bash
+python3 skills/azure-devops/scripts/work_item_context.py
+
+# Output:
+# Work Item: AB#1234
+#   Title: Fix authentication bug
+#   State: Active
+#   Source: branch_name
+#   Suggested Area: ProjectName\Platform\Authentication
+```
+
+**Create work item with auto-suggested area:**
+```bash
+python3 skills/azure-devops/scripts/work_item_context.py --create-from-branch
+
+# Output:
+# Create new work item?
+#   Title: Fix Auth Token
+#   Type: Bug
+#   Area: ProjectName\Platform\Authentication
+#   Branch: fix/AB#1234-auth-token
+#
+# Create? [y/N]:
+```
+
+**Override area path:**
+```bash
+python3 skills/azure-devops/scripts/work_item_context.py --create-from-branch \
+  --area "ProjectName\Core\Security"
+```
+
+### Area Structure Analysis
+
+Analyze your codebase to understand its component structure:
+
+```bash
+python3 skills/azure-devops/scripts/area_analyzer.py --path /path/to/repo
+
+# Output:
+# Codebase Analysis Results
+# =========================
+#
+# Detected Architecture: Clean Architecture
+#   Confidence: 85%
+#
+# Components Detected:
+#   - Authentication (Platform) - 12 files, confidence: 90%
+#   - Orders (Core) - 45 files, confidence: 95%
+#   - Notifications (Integrations) - 8 files, confidence: 75%
+#   - Web Dashboard (Clients) - 120 files, confidence: 98%
+#
+# Suggested Area Structure:
+#   ProjectName
+#   ├── Platform
+#   │   ├── Authentication
+#   │   └── Infrastructure
+#   ├── Core
+#   │   ├── Orders
+#   │   └── Inventory
+#   ├── Integrations
+#   │   └── Notifications
+#   └── Clients
+#       └── Web
+```
+
+**JSON output for automation:**
+```bash
+python3 skills/azure-devops/scripts/area_analyzer.py --path /path/to/repo --json
+```
+
+### Area Advisory (Best Practices)
+
+Get recommendations for improving your ADO area structure:
+
+```bash
+python3 skills/azure-devops/scripts/area_advisor.py
+
+# Output:
+# Area Advisory Report
+# ====================
+#
+# Health Score: 65/100
+#
+# Anti-Patterns Detected:
+#   ⚠ TEAM_NAMED: Areas named after teams instead of domains
+#     - ProjectName\Team Alpha → Consider: ProjectName\Core\Authentication
+#     - ProjectName\Team Beta → Consider: ProjectName\Integrations
+#
+#   ⚠ TOO_FLAT: Missing hierarchical organization
+#     - 15 areas at root level, recommend max 5-6 categories
+#
+#   ⚠ TECH_BASED: Areas based on technology rather than business domain
+#     - ProjectName\API → Consider: ProjectName\Core\{DomainName}
+#
+# Gap Analysis:
+#   Components in code but not in ADO areas:
+#     - Notifications (src/Notifications/)
+#     - Reporting (src/Reporting/)
+#
+#   ADO areas with no matching code:
+#     - ProjectName\Legacy (consider removing or archiving)
+#
+# Recommendations:
+#   1. Create domain-based top-level categories (Platform, Core, Clients)
+#   2. Rename team-based areas to reflect business capabilities
+#   3. Add missing component areas: Notifications, Reporting
+#   4. Archive or remove unused areas: Legacy
+```
+
+### Area Best Practices
+
+The system evaluates areas against these best practices:
+
+| Practice | Anti-Pattern | Recommendation |
+|----------|--------------|----------------|
+| Domain-based naming | Team-named areas (`Team Alpha`) | Use business domains (`Orders`, `Authentication`) |
+| Product-aligned | Tech-based areas (`API`, `Database`) | Align with product components |
+| Balanced hierarchy | Too flat (>10 root areas) or too deep (>4 levels) | Use 3-4 levels max |
+| Clear ownership | Orphaned/unused areas | Remove or consolidate unused areas |
+| Consistent naming | Mixed conventions (`user-auth` vs `UserAuth`) | Use consistent PascalCase |
+
+### Category Mappings
+
+The system automatically categorizes components:
+
+| Keywords | Category | Purpose |
+|----------|----------|---------|
+| `auth`, `identity`, `security`, `infrastructure` | Platform | Cross-cutting concerns |
+| `domain`, `orders`, `inventory`, `catalog` | Core | Business logic |
+| `gateway`, `connector`, `external`, `api` | Integrations | External systems |
+| `web`, `mobile`, `desktop`, `cli` | Clients | User interfaces |
+| `devops`, `deployment`, `ops` | Operations | DevOps & tooling |
+
+### Complete Area Workflow
+
+```bash
+# 1. Analyze your codebase structure
+python3 skills/azure-devops/scripts/area_analyzer.py --path . --json > .ado/codebase-analysis.json
+
+# 2. Get recommendations for ADO areas
+python3 skills/azure-devops/scripts/area_advisor.py > .ado/area-recommendations.md
+
+# 3. Review recommendations and create areas in ADO (manual step)
+# Use Azure DevOps web UI or CLI to create suggested areas
+
+# 4. Work items will now auto-suggest areas based on code context
+python3 skills/azure-devops/scripts/work_item_context.py --create-from-branch
 ```
 
 ## WIQL Quick Reference
