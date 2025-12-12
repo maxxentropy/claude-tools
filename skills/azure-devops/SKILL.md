@@ -99,28 +99,123 @@ python3 skills/azure-devops/scripts/discover-project.py --config .ado/config.jso
 
 ## Query Presets
 
-Use presets for optimized, commonly-needed queries:
+Use presets for optimized, commonly-needed queries. Presets follow Microsoft best practices (date-limiting, proper indexing) and are organized by use case.
 
 ```bash
 python3 skills/azure-devops/scripts/query-work-items.py --preset PRESET_NAME [--format table]
 ```
 
-| Preset | Description |
-|--------|-------------|
-| `my-active` | Active work items assigned to me |
-| `my-all` | All work items assigned to me |
-| `changed-today` | Items I changed today |
-| `changed-this-week` | Items I changed in past 7 days |
-| `completed-this-week` | Items I completed in past 7 days |
-| `recent-bugs` | Bugs changed in past 14 days |
-| `sprint-items` | Items in current sprint/iteration |
-| `blocked` | Blocked work items |
-| `created-by-me` | Items I created in past 30 days |
-| `high-priority` | High priority (P1/P2) active items |
+### Personal Work (`my-*`)
+| Preset | Description | Use Case |
+|--------|-------------|----------|
+| `my-active` | Active items assigned to me | Daily work list, standup |
+| `my-in-progress` | Items I'm actively working on | Current focus |
+| `my-new` | New items assigned to me | Items to pick up |
+| `my-blocked` | My blocked items | Blockers to escalate |
+| `my-recent` | Items I touched in last 3 days | Recent context |
+| `my-all` | All items assigned to me | Full inventory |
 
-List all presets:
+### Sprint/Iteration (`sprint-*`)
+| Preset | Description | Use Case |
+|--------|-------------|----------|
+| `sprint-items` | All items in current sprint | Sprint overview |
+| `sprint-mine` | My items in current sprint | Personal sprint focus |
+| `sprint-not-started` | Sprint items not yet started | Risk identification |
+| `sprint-in-progress` | Sprint items being worked | Active work |
+| `sprint-done` | Completed sprint items | Progress tracking |
+| `sprint-at-risk` | High priority, not started | Sprint health |
+| `sprint-unassigned` | Unassigned sprint items | Capacity planning |
+
+### Completed (`completed-*`)
+| Preset | Description | Use Case |
+|--------|-------------|----------|
+| `completed-today` | Items completed today | End of day summary |
+| `completed-this-week` | Items completed in past 7 days | Weekly summary |
+| `completed-by-me-today` | Items I completed today | Daily standup |
+| `completed-by-me-this-week` | Items I completed this week | WSR input |
+
+### Activity (`changed-*`)
+| Preset | Description | Use Case |
+|--------|-------------|----------|
+| `changed-today` | Items I changed today | Daily activity |
+| `changed-this-week` | Items I changed this week | Weekly activity |
+| `recent-activity` | All items changed in 24 hours | Team pulse |
+
+### Bugs (`bugs-*`)
+| Preset | Description | Use Case |
+|--------|-------------|----------|
+| `bugs-mine` | Active bugs assigned to me | Bug fixing focus |
+| `bugs-critical` | Critical/high severity bugs | Urgent issues |
+| `bugs-new` | Bugs created in past 14 days | New issues trend |
+| `bugs-triage` | New, unassigned bugs | Triage meeting |
+| `bugs-recent` | Bugs changed in past 14 days | Bug activity |
+
+### Backlog (`backlog-*`)
+| Preset | Description | Use Case |
+|--------|-------------|----------|
+| `backlog-ready` | Items with estimates, ready for sprint | Sprint planning |
+| `backlog-unestimated` | Items without story points | Refinement needed |
+| `backlog-stale` | Items not updated in 90+ days | Backlog grooming |
+
+### Priority (`priority-*`)
+| Preset | Description | Use Case |
+|--------|-------------|----------|
+| `priority-critical` | P1 critical items | Executive focus |
+| `priority-high` | P1-P2 high priority items | Priority work |
+| `priority-mine` | My high priority items | Personal priority |
+
+### Blocked (`blocked-*`)
+| Preset | Description | Use Case |
+|--------|-------------|----------|
+| `blocked-all` | All blocked items | Impediment tracking |
+| `blocked-long` | Blocked > 3 days | Escalation candidates |
+
+### Created (`created-*`)
+| Preset | Description | Use Case |
+|--------|-------------|----------|
+| `created-today` | Items created today | New work intake |
+| `created-this-week` | Items created this week | Weekly intake |
+| `created-by-me` | Items I created (30 days) | My contributions |
+
+### Team (`team-*`)
+| Preset | Description | Use Case |
+|--------|-------------|----------|
+| `team-active` | All active items (team-wide) | Team workload |
+| `team-completed-this-week` | Team completions this week | Team progress |
+
+### List All Presets
 ```bash
+# List all presets with descriptions
 python3 skills/azure-devops/scripts/query-work-items.py --list-presets
+
+# List with use cases (verbose)
+python3 skills/azure-devops/scripts/query-work-items.py --list-presets -v
+```
+
+### Common Workflows
+
+**Daily Standup:**
+```bash
+python3 query-work-items.py --preset my-in-progress --format table
+python3 query-work-items.py --preset completed-by-me-today --format table
+python3 query-work-items.py --preset my-blocked --format table
+```
+
+**Weekly Status Report:**
+```bash
+python3 query-work-items.py --preset completed-by-me-this-week --format table
+```
+
+**Sprint Planning:**
+```bash
+python3 query-work-items.py --preset backlog-ready --format table
+python3 query-work-items.py --preset sprint-unassigned --format table
+```
+
+**Bug Triage:**
+```bash
+python3 query-work-items.py --preset bugs-triage --format table
+python3 query-work-items.py --preset bugs-critical --format table
 ```
 
 ## Best Practices

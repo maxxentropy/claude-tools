@@ -53,136 +53,27 @@ try:
 except ImportError:
     HAS_INDEX = False
 
-
-# Optimized query presets following Microsoft best practices:
-# - Date/range limiting clauses near the top
-# - Avoid Contains operator (use Contains Words when available)
-# - Minimize Or operators
-# - Specify fields explicitly to reduce payload
-QUERY_PRESETS = {
-    "my-active": {
-        "description": "Active work items assigned to me",
-        "wiql": """
-            SELECT [System.Id], [System.Title], [System.State], [System.WorkItemType],
-                   [System.AreaPath], [System.IterationPath], [Microsoft.VSTS.Common.Priority]
-            FROM workitems
-            WHERE [System.AssignedTo] = @Me
-              AND [System.State] NOT IN ('Closed', 'Done', 'Removed')
-            ORDER BY [Microsoft.VSTS.Common.Priority] ASC, [System.ChangedDate] DESC
-        """,
-        "fields": ["System.Id", "System.Title", "System.State", "System.WorkItemType",
-                   "System.AreaPath", "System.IterationPath", "Microsoft.VSTS.Common.Priority",
-                   "System.AssignedTo", "System.ChangedDate"]
-    },
-    "my-all": {
-        "description": "All work items assigned to me",
-        "wiql": """
-            SELECT [System.Id], [System.Title], [System.State], [System.WorkItemType]
-            FROM workitems
-            WHERE [System.AssignedTo] = @Me
-            ORDER BY [System.ChangedDate] DESC
-        """,
-        "fields": ["System.Id", "System.Title", "System.State", "System.WorkItemType",
-                   "System.AssignedTo", "System.ChangedDate"]
-    },
-    "changed-today": {
-        "description": "Items I changed today",
-        "wiql": """
-            SELECT [System.Id], [System.Title], [System.State], [System.ChangedDate]
-            FROM workitems
-            WHERE [System.ChangedDate] >= @Today
-              AND [System.AssignedTo] = @Me
-            ORDER BY [System.ChangedDate] DESC
-        """,
-        "fields": ["System.Id", "System.Title", "System.State", "System.ChangedDate",
-                   "System.WorkItemType", "System.AssignedTo"]
-    },
-    "changed-this-week": {
-        "description": "Items I changed in the past 7 days",
-        "wiql": """
-            SELECT [System.Id], [System.Title], [System.State], [System.ChangedDate]
-            FROM workitems
-            WHERE [System.ChangedDate] >= @Today - 7
-              AND [System.AssignedTo] = @Me
-            ORDER BY [System.ChangedDate] DESC
-        """,
-        "fields": ["System.Id", "System.Title", "System.State", "System.ChangedDate",
-                   "System.WorkItemType", "System.AssignedTo"]
-    },
-    "completed-this-week": {
-        "description": "Items completed in the past 7 days",
-        "wiql": """
-            SELECT [System.Id], [System.Title], [System.State], [Microsoft.VSTS.Common.ClosedDate]
-            FROM workitems
-            WHERE [System.ChangedDate] >= @Today - 7
-              AND [System.AssignedTo] = @Me
-              AND [System.State] IN ('Closed', 'Done')
-            ORDER BY [System.ChangedDate] DESC
-        """,
-        "fields": ["System.Id", "System.Title", "System.State", "System.ChangedDate",
-                   "Microsoft.VSTS.Common.ClosedDate", "System.WorkItemType", "System.AssignedTo"]
-    },
-    "recent-bugs": {
-        "description": "Bugs changed in the past 14 days",
-        "wiql": """
-            SELECT [System.Id], [System.Title], [System.State], [Microsoft.VSTS.Common.Priority]
-            FROM workitems
-            WHERE [System.ChangedDate] >= @Today - 14
-              AND [System.WorkItemType] = 'Bug'
-            ORDER BY [Microsoft.VSTS.Common.Priority] ASC, [System.ChangedDate] DESC
-        """,
-        "fields": ["System.Id", "System.Title", "System.State", "Microsoft.VSTS.Common.Priority",
-                   "System.WorkItemType", "System.AssignedTo", "System.ChangedDate"]
-    },
-    "sprint-items": {
-        "description": "Items in current sprint/iteration",
-        "wiql": """
-            SELECT [System.Id], [System.Title], [System.State], [System.WorkItemType]
-            FROM workitems
-            WHERE [System.IterationPath] = @CurrentIteration
-              AND [System.State] NOT IN ('Removed')
-            ORDER BY [System.WorkItemType], [Microsoft.VSTS.Common.Priority] ASC
-        """,
-        "fields": ["System.Id", "System.Title", "System.State", "System.WorkItemType",
-                   "System.AssignedTo", "System.IterationPath", "Microsoft.VSTS.Common.Priority"]
-    },
-    "blocked": {
-        "description": "Blocked work items",
-        "wiql": """
-            SELECT [System.Id], [System.Title], [System.State], [System.Tags]
-            FROM workitems
-            WHERE [System.State] NOT IN ('Closed', 'Done', 'Removed')
-              AND ([System.Tags] CONTAINS 'Blocked' OR [System.State] = 'Blocked')
-            ORDER BY [System.ChangedDate] DESC
-        """,
-        "fields": ["System.Id", "System.Title", "System.State", "System.Tags",
-                   "System.WorkItemType", "System.AssignedTo", "System.ChangedDate"]
-    },
-    "created-by-me": {
-        "description": "Items I created in the past 30 days",
-        "wiql": """
-            SELECT [System.Id], [System.Title], [System.State], [System.CreatedDate]
-            FROM workitems
-            WHERE [System.CreatedDate] >= @Today - 30
-              AND [System.CreatedBy] = @Me
-            ORDER BY [System.CreatedDate] DESC
-        """,
-        "fields": ["System.Id", "System.Title", "System.State", "System.CreatedDate",
-                   "System.WorkItemType", "System.AssignedTo"]
-    },
-    "high-priority": {
-        "description": "High priority (P1/P2) active items",
-        "wiql": """
-            SELECT [System.Id], [System.Title], [System.State], [Microsoft.VSTS.Common.Priority]
-            FROM workitems
-            WHERE [Microsoft.VSTS.Common.Priority] <= 2
-              AND [System.State] NOT IN ('Closed', 'Done', 'Removed')
-            ORDER BY [Microsoft.VSTS.Common.Priority] ASC, [System.ChangedDate] DESC
-        """,
-        "fields": ["System.Id", "System.Title", "System.State", "Microsoft.VSTS.Common.Priority",
-                   "System.WorkItemType", "System.AssignedTo", "System.ChangedDate"]
+# Import query presets
+try:
+    from query_presets import QUERY_PRESETS, list_presets, get_categories
+    HAS_PRESETS_MODULE = True
+except ImportError:
+    HAS_PRESETS_MODULE = False
+    # Fallback: minimal presets for backwards compatibility
+    QUERY_PRESETS = {
+        "my-active": {
+            "description": "Active work items assigned to me",
+            "wiql": """
+                SELECT [System.Id], [System.Title], [System.State], [System.WorkItemType]
+                FROM workitems
+                WHERE [System.AssignedTo] = @Me
+                  AND [System.State] NOT IN ('Closed', 'Done', 'Removed')
+                ORDER BY [Microsoft.VSTS.Common.Priority] ASC, [System.ChangedDate] DESC
+            """,
+            "fields": ["System.Id", "System.Title", "System.State", "System.WorkItemType",
+                       "System.AssignedTo", "System.ChangedDate"]
+        }
     }
-}
 
 
 def run_az_command(args: list, timeout: int = 60) -> Optional[dict | list]:
@@ -545,8 +436,8 @@ Examples:
     )
     parser.add_argument("--config", "-c", default=".ado/config.json",
                         help="Path to config file (default: .ado/config.json)")
-    parser.add_argument("--preset", "-p", choices=list(QUERY_PRESETS.keys()),
-                        help="Use preset query")
+    parser.add_argument("--preset", "-p", metavar="NAME",
+                        help="Use preset query (see --list-presets)")
     parser.add_argument("--wiql", "-w",
                         help="Custom WIQL query")
     parser.add_argument("--id", "-i", type=int, nargs="+",
@@ -579,9 +470,16 @@ Examples:
 
     # List presets
     if args.list_presets:
-        print("Available presets:\n")
-        for name, preset in QUERY_PRESETS.items():
-            print(f"  {name:20} - {preset['description']}")
+        if HAS_PRESETS_MODULE:
+            print("Azure DevOps Query Presets")
+            print("=" * 60)
+            print(list_presets(verbose=args.verbose))
+            print(f"\nTotal: {len(QUERY_PRESETS)} presets in {len(get_categories())} categories")
+            print("\nUsage: python query-work-items.py --preset <name>")
+        else:
+            print("Available presets:\n")
+            for name, preset in QUERY_PRESETS.items():
+                print(f"  {name:20} - {preset['description']}")
         return 0
 
     # Show context (checks ADO if work item not in cache)
@@ -699,7 +597,15 @@ Examples:
             results = get_work_items_batch(config, args.id, verbose=args.verbose)
 
     elif args.preset:
+        if args.preset not in QUERY_PRESETS:
+            print(f"Error: Unknown preset '{args.preset}'", file=sys.stderr)
+            print(f"Use --list-presets to see available presets", file=sys.stderr)
+            return 1
         preset = QUERY_PRESETS[args.preset]
+        if args.verbose:
+            print(f"Running preset: {args.preset}", file=sys.stderr)
+            if preset.get("use_case"):
+                print(f"  Use case: {preset['use_case']}", file=sys.stderr)
         results = query_work_items(
             config, preset["wiql"],
             fields=preset.get("fields"),

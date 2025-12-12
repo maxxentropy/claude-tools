@@ -39,6 +39,7 @@ repos:
         exclude: '\.min\.(js|css)$|\.md$|\.wsr/reports/'
 
       # Prevent committing directly to main/master
+      # Bypass with: git commit --no-verify -m "message"
       - id: no-commit-to-branch
         args: ['--branch', 'main', '--branch', 'master']
 
