@@ -32,11 +32,11 @@ repos:
 
       # Ensure files end with newline
       - id: end-of-file-fixer
-        exclude: '\.min\.(js|css)$'
+        exclude: '\.min\.(js|css)$|\.wsr/reports/'
 
       # Remove trailing whitespace
       - id: trailing-whitespace
-        exclude: '\.min\.(js|css)$|\.md$'
+        exclude: '\.min\.(js|css)$|\.md$|\.wsr/reports/'
 
       # Prevent committing directly to main/master
       - id: no-commit-to-branch

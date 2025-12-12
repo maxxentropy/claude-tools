@@ -96,33 +96,33 @@ def parse_csproj(csproj_path: Path, root_path: Path) -> ProjectInfo:
         path=str(csproj_path),
         relative_path=str(csproj_path.relative_to(root_path)),
     )
-    
+
     try:
         tree = ET.parse(csproj_path)
         root = tree.getroot()
         ns = root.tag.split("}")[0] + "}" if root.tag.startswith("{") else ""
-        
+
         project.sdk = root.attrib.get("Sdk", "")
-        
+
         tf = root.find(f".//{ns}TargetFramework")
         if tf is not None and tf.text:
             project.target_framework = tf.text
-        
+
         ot = root.find(f".//{ns}OutputType")
         if ot is not None and ot.text:
             project.output_type = ot.text
-        
+
         for pkg_ref in root.findall(f".//{ns}PackageReference"):
             pkg_name = pkg_ref.attrib.get("Include", "")
             pkg_version = pkg_ref.attrib.get("Version", "")
             if pkg_name:
                 project.package_references.append({"name": pkg_name, "version": pkg_version})
-        
+
         for proj_ref in root.findall(f".//{ns}ProjectReference"):
             ref_path = proj_ref.attrib.get("Include", "")
             if ref_path:
                 project.project_references.append(Path(ref_path).stem)
-        
+
         project.is_test_project = any(
             "test" in project.name.lower() or
             any(pkg["name"].lower() in ["xunit", "nunit", "mstest.testframework"]
@@ -131,7 +131,7 @@ def parse_csproj(csproj_path: Path, root_path: Path) -> ProjectInfo:
         )
     except ET.ParseError as e:
         print(f"Warning: Could not parse {csproj_path}: {e}", file=sys.stderr)
-    
+
     return project
 
 
@@ -141,23 +141,23 @@ def scan_cs_files(project_path: Path) -> tuple[list[str], dict[str, int], int, l
     patterns_found = set()
     file_counts = {"cs": 0, "razor": 0, "json": 0, "xml": 0}
     total_lines = 0
-    
+
     for cs_file in project_dir.rglob("*.cs"):
         if "\\obj\\" in str(cs_file) or "/obj/" in str(cs_file):
             continue
         if "\\bin\\" in str(cs_file) or "/bin/" in str(cs_file):
             continue
-            
+
         file_counts["cs"] += 1
-        
+
         try:
             content = cs_file.read_text(encoding="utf-8", errors="ignore")
             total_lines += len(content.splitlines())
-            
+
             ns_match = re.search(r"namespace\s+([\w.]+)", content)
             if ns_match:
                 namespaces.add(ns_match.group(1))
-            
+
             for pattern_name, signatures in PATTERN_SIGNATURES.items():
                 for sig in signatures:
                     if re.search(sig, content):
@@ -165,10 +165,10 @@ def scan_cs_files(project_path: Path) -> tuple[list[str], dict[str, int], int, l
                         break
         except Exception as e:
             print(f"Warning: Could not read {cs_file}: {e}", file=sys.stderr)
-    
+
     file_counts["razor"] = len(list(project_dir.rglob("*.razor")))
     file_counts["json"] = len(list(project_dir.rglob("*.json")))
-    
+
     return list(namespaces), file_counts, total_lines, list(patterns_found)
 
 
@@ -185,15 +185,15 @@ def detect_frameworks(projects: list[ProjectInfo]) -> list[str]:
 
 def detect_architecture(projects: list[ProjectInfo]) -> str:
     project_names = [p.name.lower() for p in projects]
-    
+
     clean_arch_layers = ["domain", "application", "infrastructure", "api", "webapi"]
     if sum(1 for layer in clean_arch_layers if any(layer in name for name in project_names)) >= 3:
         return "Clean Architecture"
-    
+
     ntier_layers = ["data", "business", "presentation", "services", "dal", "bll"]
     if sum(1 for layer in ntier_layers if any(layer in name for name in project_names)) >= 2:
         return "N-Tier"
-    
+
     return "Monolithic" if len(projects) == 1 else "Custom/Unknown"
 
 
@@ -201,29 +201,29 @@ def scan_codebase(root_path: str) -> SolutionInfo:
     root = Path(root_path).resolve()
     if not root.exists():
         raise ValueError(f"Path does not exist: {root_path}")
-    
+
     solution = SolutionInfo(root_path=str(root))
     solution.solution_file = find_solution_file(root)
-    
+
     for csproj in find_project_files(root):
         project = parse_csproj(csproj, root)
         namespaces, file_counts, lines, patterns = scan_cs_files(csproj)
         project.namespaces = namespaces
         project.file_counts = file_counts
         project.detected_patterns = patterns
-        
+
         solution.total_cs_files += file_counts.get("cs", 0)
         solution.total_lines_of_code += lines
         solution.projects.append(project)
-    
+
     all_patterns = set()
     for project in solution.projects:
         all_patterns.update(project.detected_patterns)
     solution.detected_patterns = sorted(list(all_patterns))
-    
+
     solution.frameworks_used = detect_frameworks(solution.projects)
     solution.detected_architecture = detect_architecture(solution.projects)
-    
+
     return solution
 
 
@@ -232,15 +232,15 @@ def main():
     parser.add_argument("path", help="Path to the .NET codebase root directory")
     parser.add_argument("--output", "-o", help="Output file path (default: stdout)", default=None)
     parser.add_argument("--pretty", "-p", help="Pretty print JSON output", action="store_true", default=True)
-    
+
     args = parser.parse_args()
-    
+
     try:
         solution = scan_codebase(args.path)
         result = asdict(solution)
         indent = 2 if args.pretty else None
         json_output = json.dumps(result, indent=indent)
-        
+
         if args.output:
             Path(args.output).write_text(json_output)
             print(f"Analysis written to {args.output}", file=sys.stderr)
