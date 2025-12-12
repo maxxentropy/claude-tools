@@ -1,0 +1,229 @@
+{
+  "week_id": "2025-W50",
+  "period_start": "2025-12-08",
+  "period_end": "2025-12-14",
+  "audience": "standard",
+  "generated_at": "2025-12-11T16:20:40.304881",
+  "entries": [
+    {
+      "id": "ccf745d7",
+      "title": "Add --no-start flag to boot-manager install.sh",
+      "status": "In Progress",
+      "domain": "Development",
+      "priority": "Medium",
+      "timeline_start": "2025-12-08",
+      "timeline_end": "2025-12-14",
+      "objective": "",
+      "solution": "",
+      "business_impact": "",
+      "technical_impact": "",
+      "risks": "",
+      "next_steps": "",
+      "work_items": [
+        {
+          "id": 581,
+          "title": "Add --no-start flag",
+          "type": "Task",
+          "state": "Active",
+          "url": "AB#581"
+        }
+      ],
+      "commits": [],
+      "parent_id": null,
+      "created_at": "2025-12-11T20:08:15.016843Z",
+      "updated_at": "2025-12-11T20:08:15.016845Z",
+      "repository": null,
+      "tags": [],
+      "total_insertions": 0,
+      "total_deletions": 0,
+      "total_files_changed": 0
+    },
+    {
+      "id": "f3a5d9dc",
+      "title": "Update provision-master-image.sh to use --no-start",
+      "status": "In Progress",
+      "domain": "Development",
+      "priority": "Medium",
+      "timeline_start": "2025-12-08",
+      "timeline_end": "2025-12-14",
+      "objective": "",
+      "solution": "",
+      "business_impact": "",
+      "technical_impact": "",
+      "risks": "",
+      "next_steps": "",
+      "work_items": [
+        {
+          "id": 582,
+          "title": "Update provision script",
+          "type": "Task",
+          "state": "Active",
+          "url": "AB#582"
+        }
+      ],
+      "commits": [],
+      "parent_id": null,
+      "created_at": "2025-12-11T20:08:15.016919Z",
+      "updated_at": "2025-12-11T20:08:15.016920Z",
+      "repository": null,
+      "tags": [],
+      "total_insertions": 0,
+      "total_deletions": 0,
+      "total_files_changed": 0
+    },
+    {
+      "id": "ccd44895",
+      "title": "Update validate-installation.sh for master image",
+      "status": "In Progress",
+      "domain": "Development",
+      "priority": "Medium",
+      "timeline_start": "2025-12-08",
+      "timeline_end": "2025-12-14",
+      "objective": "",
+      "solution": "",
+      "business_impact": "",
+      "technical_impact": "",
+      "risks": "",
+      "next_steps": "",
+      "work_items": [
+        {
+          "id": 583,
+          "title": "Update validation script",
+          "type": "Task",
+          "state": "Active",
+          "url": "AB#583"
+        }
+      ],
+      "commits": [],
+      "parent_id": null,
+      "created_at": "2025-12-11T20:08:15.016977Z",
+      "updated_at": "2025-12-11T20:08:15.016978Z",
+      "repository": null,
+      "tags": [],
+      "total_insertions": 0,
+      "total_deletions": 0,
+      "total_files_changed": 0
+    },
+    {
+      "id": "0c93efa9",
+      "title": "WSR Generator Enhancement",
+      "status": "Completed",
+      "domain": "Development",
+      "priority": "High",
+      "timeline_start": "2025-12-08",
+      "timeline_end": "2025-12-14",
+      "objective": "Add report saving to disk for manual email",
+      "solution": "",
+      "business_impact": "Enables manual email workflow until auto-send is working",
+      "technical_impact": "",
+      "risks": "",
+      "next_steps": "",
+      "work_items": [
+        {
+          "id": 585,
+          "title": "Test",
+          "type": null,
+          "state": null,
+          "url": "AB#585"
+        }
+      ],
+      "commits": [
+        {
+          "sha": "08be4b1c811b9514c3b3ed76395a8173c95e1132",
+          "short_sha": "08be4b1",
+          "subject": "Modernize to skill-creator v2 standards",
+          "author": "azure.buildagent@macdev",
+          "date": "2025-12-11",
+          "url": "https://github.com/maxxentropy/claude-tools/commit/08be4b1c811b9514c3b3ed76395a8173c95e1132",
+          "repository": "claude-tools"
+        }
+      ],
+      "parent_id": null,
+      "created_at": "2025-12-11T20:50:58.117020Z",
+      "updated_at": "2025-12-11T20:50:58.117024Z",
+      "repository": "claude-tools",
+      "tags": [],
+      "total_insertions": 27,
+      "total_deletions": 144,
+      "total_files_changed": 40
+    },
+    {
+      "id": "b7e2f8a1",
+      "title": "XTConnect Boot Manager and Dashboard Enhancements",
+      "status": "Completed",
+      "domain": "Development",
+      "priority": "High",
+      "timeline_start": "2025-12-08",
+      "timeline_end": "2025-12-14",
+      "objective": "Implement WiFi provisioning, serial port detection, and XTConnect branding",
+      "solution": "Boot manager system with captive portal, hardware API, design system",
+      "business_impact": "Demo-ready boot manager with professional XTConnect branding",
+      "technical_impact": "Improved device provisioning and configuration workflow",
+      "risks": "",
+      "next_steps": "",
+      "work_items": [
+        {
+          "id": 537,
+          "title": "WiFi provisioning boot manager system",
+          "type": "Feature",
+          "state": "Done",
+          "url": "https://dev.azure.com/val-controls/XTConnect/_workitems/edit/537"
+        }
+      ],
+      "commits": [
+        {
+          "sha": "fa26c1c36c31a0fa1b410440347492e4ec1430fa",
+          "short_sha": "fa26c1c",
+          "subject": "style: Apply XTConnect branding to boot manager and captive portal",
+          "date": "2025-12-11",
+          "url": "https://dev.azure.com/val-controls/XTConnect/_git/XTConnect.NodeService/commit/fa26c1c36c31a0fa1b410440347492e4ec1430fa",
+          "repository": "XTConnect.NodeService"
+        },
+        {
+          "sha": "bf2ba861448a74d3d7ea0c5f46ec57ab619039c6",
+          "short_sha": "bf2ba86",
+          "subject": "fix(ui): Improve dashboard branding and controller cards",
+          "date": "2025-12-11",
+          "url": "https://dev.azure.com/val-controls/XTConnect/_git/XTConnect.NodeService/commit/bf2ba861448a74d3d7ea0c5f46ec57ab619039c6",
+          "repository": "XTConnect.NodeService"
+        },
+        {
+          "sha": "e3055b53bfba84257c1e453d6bd2f8ac8c316645",
+          "short_sha": "e3055b5",
+          "subject": "feat(boot-manager): Add serial port detection and hardware API",
+          "date": "2025-12-11",
+          "url": "https://dev.azure.com/val-controls/XTConnect/_git/XTConnect.NodeService/commit/e3055b53bfba84257c1e453d6bd2f8ac8c316645",
+          "repository": "XTConnect.NodeService"
+        },
+        {
+          "sha": "55d394993e65edba3eda4bccd338487c82e280f7",
+          "short_sha": "55d3949",
+          "subject": "feat: Add XTConnect design system for Node Service dashboard",
+          "date": "2025-12-11",
+          "url": "https://dev.azure.com/val-controls/XTConnect/_git/XTConnect.NodeService/commit/55d394993e65edba3eda4bccd338487c82e280f7",
+          "repository": "XTConnect.NodeService"
+        },
+        {
+          "sha": "a3e4da336a02adcf3ba58a23e64f4b5d948c597a",
+          "short_sha": "a3e4da3",
+          "subject": "feat: Implement WiFi provisioning boot manager system AB#537",
+          "date": "2025-12-11",
+          "url": "https://dev.azure.com/val-controls/XTConnect/_git/XTConnect.NodeService/commit/a3e4da336a02adcf3ba58a23e64f4b5d948c597a",
+          "repository": "XTConnect.NodeService"
+        }
+      ],
+      "parent_id": null,
+      "created_at": "2025-12-11T21:15:00.000000Z",
+      "updated_at": "2025-12-11T21:15:00.000000Z",
+      "repository": "XTConnect.NodeService",
+      "tags": [
+        "boot-manager",
+        "branding",
+        "wifi-provisioning"
+      ],
+      "total_insertions": 0,
+      "total_deletions": 0,
+      "total_files_changed": 15
+    }
+  ]
+}

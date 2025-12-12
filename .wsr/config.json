@@ -1,0 +1,13 @@
+{
+  "version": "2.0",
+  "organization": "https://dev.azure.com/val-controls",
+  "project": "XTConnect",
+  "output_dir": ".wsr/reports",
+  "data_dir": ".wsr/data",
+  "git_remote_type": "github",
+  "git_remote_url": "https://github.com/maxxentropy/claude-tools",
+  "default_audience": "standard",
+  "author_email": "azuredevops@microsoft.com",
+  "include_orphan_commits": true,
+  "max_entries_per_report": 10
+}

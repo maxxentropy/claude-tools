@@ -1,0 +1,225 @@
+# Evaluation Output Schema
+# JSON Schema for standardized evaluation outputs
+# Version: 1.0.0
+
+$schema: "http://json-schema.org/draft-07/schema#"
+title: "Evaluation Output"
+description: "Standardized schema for AI-generated evaluations"
+
+type: object
+required:
+  - evaluation
+  - findings
+  - scores
+  - summary
+
+properties:
+  evaluation:
+    type: object
+    description: "Metadata about the evaluation"
+    required:
+      - id
+      - type
+      - date
+      - model
+      - target
+    properties:
+      id:
+        type: string
+        pattern: "^eval-[a-f0-9]{8}$"
+        description: "Unique evaluation identifier"
+      type:
+        type: string
+        enum:
+          - architecture-review
+          - code-review
+          - security-review
+          - performance-review
+          - accessibility-review
+          - custom
+        description: "Type of evaluation performed"
+      date:
+        type: string
+        format: date-time
+        description: "ISO 8601 timestamp of evaluation"
+      model:
+        type: string
+        description: "Model identifier that produced this evaluation"
+      target:
+        type: object
+        required:
+          - path
+        properties:
+          path:
+            type: string
+            description: "Path to evaluated code/component"
+          commit:
+            type: string
+            description: "Git commit hash if applicable"
+          description:
+            type: string
+            description: "Brief description of what was evaluated"
+      context:
+        type: object
+        properties:
+          criteria:
+            type: string
+            description: "Evaluation criteria or focus"
+          scope:
+            type: string
+            enum: [full, partial, focused]
+            description: "Scope of evaluation"
+          time_spent_minutes:
+            type: integer
+            minimum: 0
+            description: "Approximate time spent on evaluation"
+
+  findings:
+    type: array
+    description: "List of findings from the evaluation"
+    items:
+      type: object
+      required:
+        - id
+        - severity
+        - category
+        - location
+        - title
+        - evidence
+        - reasoning
+        - impact
+        - recommendation
+      properties:
+        id:
+          type: string
+          pattern: "^(CRITICAL|HIGH|MEDIUM|LOW|INFO)-\\d{3}$"
+          description: "Finding identifier"
+        severity:
+          type: string
+          enum: [critical, high, medium, low, info]
+          description: "Severity level"
+        category:
+          type: string
+          enum:
+            - thread-safety
+            - resource-management
+            - error-handling
+            - state-management
+            - external-operations
+            - api-web-layer
+            - configuration
+            - code-consistency
+            - security
+            - performance
+            - other
+          description: "Normalized category"
+        location:
+          type: object
+          required:
+            - file
+          properties:
+            file:
+              type: string
+              description: "File path relative to target"
+            line:
+              type: integer
+              minimum: 1
+              description: "Line number"
+            function:
+              type: string
+              description: "Function or method name"
+            class:
+              type: string
+              description: "Class name if applicable"
+        title:
+          type: string
+          maxLength: 100
+          description: "Brief title of the finding"
+        evidence:
+          type: string
+          description: "Code snippet or description proving the issue exists"
+        reasoning:
+          type: string
+          description: "Explanation of why this is a problem"
+        impact:
+          type: string
+          description: "What could go wrong if not fixed"
+        recommendation:
+          type: string
+          description: "Specific fix recommendation"
+        fix_applied:
+          type: boolean
+          default: false
+          description: "Whether this was fixed during the session"
+        work_item:
+          type: string
+          description: "Associated work item ID (e.g., AB#123)"
+
+  scores:
+    type: object
+    description: "Scores by category and overall"
+    required:
+      - categories
+      - overall
+      - production_ready
+    properties:
+      categories:
+        type: object
+        description: "Score (1-10) for each category"
+        additionalProperties:
+          type: integer
+          minimum: 1
+          maximum: 10
+      overall:
+        type: number
+        minimum: 1
+        maximum: 10
+        description: "Overall score"
+      production_ready:
+        type: boolean
+        description: "Is the code production-ready?"
+
+  summary:
+    type: object
+    description: "Summary statistics"
+    required:
+      - total_findings
+      - by_severity
+      - fingerprint
+    properties:
+      total_findings:
+        type: integer
+        minimum: 0
+      by_severity:
+        type: object
+        properties:
+          critical:
+            type: integer
+            minimum: 0
+          high:
+            type: integer
+            minimum: 0
+          medium:
+            type: integer
+            minimum: 0
+          low:
+            type: integer
+            minimum: 0
+          info:
+            type: integer
+            minimum: 0
+      top_issues:
+        type: array
+        items:
+          type: string
+        maxItems: 5
+        description: "Top 5 most important findings"
+      positive_observations:
+        type: array
+        items:
+          type: string
+        description: "What's done well"
+      fingerprint:
+        type: string
+        pattern: "^[a-f0-9]{12}$"
+        description: "Hash for quick comparison (first 12 chars of SHA256 of finding IDs + severities)"

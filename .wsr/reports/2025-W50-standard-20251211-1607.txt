@@ -1,0 +1,26 @@
+WEEKLY STATUS REPORT - December 8-14, 2025
+==================================================
+
+Completed: 1 | In Progress: 3 | Blocked: 0 | Work Items: 4
+
+--------------------------------------------------
+
+1. WSR Generator Enhancement
+   ● Completed | High Priority
+   Objective: Add report saving to disk for manual email...
+   Work Items: 585
+
+2. Add --no-start flag to boot-manager install.sh
+   ◐ In Progress | Medium Priority
+   Work Items: 581
+
+3. Update provision-master-image.sh to use --no-start
+   ◐ In Progress | Medium Priority
+   Work Items: 582
+
+4. Update validate-installation.sh for master image
+   ◐ In Progress | Medium Priority
+   Work Items: 583
+
+--------------------------------------------------
+Generated: 2025-12-11 16:07

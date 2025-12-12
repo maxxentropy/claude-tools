@@ -1,0 +1,43 @@
+{
+  "default_channel": "teams",
+  "email": {
+    "enabled": true,
+    "smtp_server": "smtp.office365.com",
+    "smtp_port": 587,
+    "use_tls": true,
+    "username": "noreply@valproducts.com",
+    "password": "EN1EDJGw80xn8TGPW3N6l0sF",
+    "from_address": "noreply@valproducts.com",
+    "from_name": "Valco Industries Inc.",
+    "to_addresses": ["sroy@val-co.com", "sbennington@val-co.com"],
+    "cc_addresses": [],
+    "subject_template": "Weekly Status Report - {date_range}",
+    "include_pdf": false
+  },
+  "email_cli": {
+    "enabled": false,
+    "cli_path": "wsr-email-cli",
+    "template": "wsr-report",
+    "to_addresses": ["sroy@val-co.com", "sbennington@val-co.com"],
+    "cc_addresses": [],
+    "subject_template": "Weekly Status Report - {date_range}",
+    "branding": {
+      "companyName": "Val Products",
+      "productName": "XTConnect",
+      "primaryColor": "#007bff",
+      "accentColor": "#28a745",
+      "supportEmail": "",
+      "websiteUrl": ""
+    }
+  },
+  "teams": {
+    "enabled": true,
+    "webhook_url": "https://valcocompanies.webhook.office.com/webhookb2/961fd13a-b81e-4dba-a296-4af502f7e920@3b634271-dff5-4eca-ba73-4409f104a38f/IncomingWebhook/84e5ddead39f4e3cbeeb4ad0d1bdd959/fbf881e8-547d-40be-a631-ecde395c3fb9/V2uUxkaYs5b8o70uRL3LyG_hEPRAuqZt5Wyi1sjdRlIEg1",
+    "mention_users": ["sbennington@val-co.com"]
+  },
+  "slack": {
+    "enabled": false,
+    "webhook_url": "",
+    "channel": ""
+  }
+}

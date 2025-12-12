@@ -12,16 +12,150 @@ Skills extend Claude Code with specialized workflows. Each skill has YAML frontm
 
 | Skill | Purpose | Location |
 |-------|---------|----------|
+| code-review | Per-change code review (C#, Python) - correctness, safety, patterns | `skills/code-review/` |
+| architecture-review | System-level architectural assessment - resilience, observability, design | `skills/architecture-review/` |
+| eval-framework | Capture, store, compare evaluations for consistency measurement | `skills/eval-framework/` |
 | docgen | Generate .NET documentation (architecture, API, domain models) | `skills/docgen/` |
 | azure-devops | Work items, pipelines, repositories via Azure CLI | `skills/azure-devops/` |
+| github | Issues, pull requests, repositories via GitHub CLI | `skills/github/` |
 | wsr-generator | Weekly status reports from git and ADO activity | `skills/wsr-generator/` |
 | ui-design-team | Cross-platform UI design and implementation | `skills/ui-design-team/` |
+
+## Installed Agents
+
+Agents provide expert personas for complex reasoning tasks. Located in `agents/`.
+
+| Agent | Purpose | Specialty |
+|-------|---------|-----------|
+| software-architect | System design, ADRs, technology decisions | Forward-looking design |
+| database-architect | Schema design, EF Core, query optimization | Data modeling |
+| senior-code-reviewer | Deep code analysis, subtle bugs, teaching | Expert judgment |
+| unit-test-architect | Test strategy, testability, coverage | Test-driven quality |
+| devops-engineer | CI/CD, infrastructure, deployment | Automation & operations |
+| security-engineer | Threat modeling, vulnerability analysis | Security & compliance |
+
+## Development Lifecycle Integration
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         FULL DEVELOPMENT LIFECYCLE                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐    │
+│  │   DESIGN    │   │  IMPLEMENT  │   │    TEST     │   │   DEPLOY    │    │
+│  ├─────────────┤   ├─────────────┤   ├─────────────┤   ├─────────────┤    │
+│  │ software-   │   │ code-review │   │ unit-test-  │   │ devops-     │    │
+│  │ architect   │──►│ skill       │──►│ architect   │──►│ engineer    │    │
+│  │             │   │      │      │   │             │   │      │      │    │
+│  │ architecture│   │      ▼      │   │             │   │      ▼      │    │
+│  │ -review     │   │ senior-code │   │             │   │ security-   │    │
+│  │ skill       │   │ -reviewer   │   │             │   │ engineer    │    │
+│  └─────────────┘   └─────────────┘   └─────────────┘   └─────────────┘    │
+│                                                                             │
+│  ◄──────────────────── Continuous Feedback Loop ────────────────────────►  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Tool Selection Matrix
+
+| User Request | Tool | Type |
+|--------------|------|------|
+| "Review this PR" / "Review my changes" | `code-review` | Skill |
+| "This code feels wrong" / "Deep review" | `senior-code-reviewer` | Agent |
+| "Review the architecture" / "Assess tech debt" | `architecture-review` | Skill |
+| "How should I design X?" / "Should we use Y?" | `software-architect` | Agent |
+| "Does this follow Clean Architecture?" | `architecture-review` | Skill |
+| "Create an ADR for this decision" | `software-architect` | Agent |
+| "Design the database schema" | `database-architect` | Agent |
+| "Map my domain model to EF Core" | `database-architect` | Agent |
+| "My queries are slow / N+1 issues" | `database-architect` | Agent |
+| "Plan a database migration" | `database-architect` | Agent |
+| "Add tests for this code" | `unit-test-architect` | Agent |
+| "This code is hard to test" | `unit-test-architect` | Agent |
+| "Set up CI/CD pipeline" | `devops-engineer` | Agent |
+| "Create deployment checklist" | `devops-engineer` | Agent |
+| "Review for security issues" | `security-engineer` | Agent |
+| "Create a threat model" | `security-engineer` | Agent |
+| "Generate documentation" | `docgen` | Skill |
+| "Create work items" | `azure-devops` / `github` | Skill |
+
+## Skills vs Agents
+
+| Aspect | Skills | Agents |
+|--------|--------|--------|
+| **Purpose** | Structured workflows with reference materials | Expert personas with reasoning approaches |
+| **Context** | Load checklists, patterns, best practices | Apply expert judgment, deep analysis |
+| **Best for** | Systematic, repeatable processes | Complex problems requiring expertise |
+| **Location** | `skills/` | `agents/` |
+| **Examples** | code-review, architecture-review | software-architect, security-engineer |
+
+## Common Workflows
+
+**Assessing a new codebase:**
+1. `architecture-review` skill → Full assessment
+2. `software-architect` agent → ADRs for findings
+3. `azure-devops` skill → Create work items
+
+**Reviewing a complex PR:**
+1. `code-review` skill → Systematic checklist
+2. `senior-code-reviewer` agent → Deep analysis (if needed)
+3. `unit-test-architect` agent → Test coverage
+
+**Designing a new feature:**
+1. `software-architect` agent → Design & ADR
+2. (implement)
+3. `code-review` skill → Review implementation
+
+**Setting up a new service:**
+1. `software-architect` agent → Architecture design
+2. `devops-engineer` agent → CI/CD pipeline
+3. `security-engineer` agent → Threat model
+4. (implement)
+5. `code-review` skill → Review code
+
+**Security assessment:**
+1. `architecture-review` skill → Identify security gaps
+2. `security-engineer` agent → Threat model & assessment
+3. `azure-devops` skill → Create security work items
+
+**Improving test coverage:**
+1. `unit-test-architect` agent → Testability assessment
+2. (refactor if needed)
+3. `unit-test-architect` agent → Write tests
+4. `devops-engineer` agent → CI integration
+
+**Designing a new data model:**
+1. `software-architect` agent → Domain model design
+2. `database-architect` agent → Schema design & EF Core mapping
+3. `database-architect` agent → Migration strategy
+4. `devops-engineer` agent → Migration deployment
+
+**Optimizing database performance:**
+1. `database-architect` agent → Query analysis & optimization
+2. `database-architect` agent → Index strategy
+3. `devops-engineer` agent → Apply changes to production
 
 ### Skill Invocation
 
 Skills trigger automatically based on their `description` in YAML frontmatter. You can also invoke explicitly:
 - "Use the docgen skill to document this project"
 - "Read skills/azure-devops/SKILL.md and query my work items"
+
+### Work Item Platform Selection
+
+When asked to create/query work items, bugs, tasks, or issues, detect the platform:
+
+```bash
+python3 skills/detect-platform.py
+```
+
+**Rules (in priority order):**
+1. If `.ado/config.json` exists → **Azure DevOps** (always wins)
+2. If Azure DevOps remote exists → **Azure DevOps**
+3. If GitHub remote exists → **GitHub**
+
+Many repos have both GitHub and Azure DevOps remotes. GitHub is for code sharing only; Azure DevOps is the primary work item tracker.
 
 ## Global Preferences
 
@@ -58,4 +192,11 @@ Project-level `CLAUDE.md` files override these global settings.
 az --version                    # Check installed
 az extension list               # Check devops extension
 az login                        # Re-authenticate
+```
+
+### GitHub CLI issues
+```bash
+gh --version                    # Check installed
+gh auth status                  # Check authentication
+gh auth login                   # Re-authenticate
 ```

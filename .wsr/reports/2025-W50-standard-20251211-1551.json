@@ -1,0 +1,141 @@
+{
+  "week_id": "2025-W50",
+  "period_start": "2025-12-08",
+  "period_end": "2025-12-14",
+  "audience": "standard",
+  "generated_at": "2025-12-11T15:51:03.261389",
+  "entries": [
+    {
+      "id": "ccf745d7",
+      "title": "Add --no-start flag to boot-manager install.sh",
+      "status": "In Progress",
+      "domain": "Development",
+      "priority": "Medium",
+      "timeline_start": "2025-12-08",
+      "timeline_end": "2025-12-14",
+      "objective": "",
+      "solution": "",
+      "business_impact": "",
+      "technical_impact": "",
+      "risks": "",
+      "next_steps": "",
+      "work_items": [
+        {
+          "id": 581,
+          "title": "Add --no-start flag",
+          "type": "Task",
+          "state": "Active",
+          "url": "AB#581"
+        }
+      ],
+      "commits": [],
+      "parent_id": null,
+      "created_at": "2025-12-11T20:08:15.016843Z",
+      "updated_at": "2025-12-11T20:08:15.016845Z",
+      "repository": null,
+      "tags": [],
+      "total_insertions": 0,
+      "total_deletions": 0,
+      "total_files_changed": 0
+    },
+    {
+      "id": "f3a5d9dc",
+      "title": "Update provision-master-image.sh to use --no-start",
+      "status": "In Progress",
+      "domain": "Development",
+      "priority": "Medium",
+      "timeline_start": "2025-12-08",
+      "timeline_end": "2025-12-14",
+      "objective": "",
+      "solution": "",
+      "business_impact": "",
+      "technical_impact": "",
+      "risks": "",
+      "next_steps": "",
+      "work_items": [
+        {
+          "id": 582,
+          "title": "Update provision script",
+          "type": "Task",
+          "state": "Active",
+          "url": "AB#582"
+        }
+      ],
+      "commits": [],
+      "parent_id": null,
+      "created_at": "2025-12-11T20:08:15.016919Z",
+      "updated_at": "2025-12-11T20:08:15.016920Z",
+      "repository": null,
+      "tags": [],
+      "total_insertions": 0,
+      "total_deletions": 0,
+      "total_files_changed": 0
+    },
+    {
+      "id": "ccd44895",
+      "title": "Update validate-installation.sh for master image",
+      "status": "In Progress",
+      "domain": "Development",
+      "priority": "Medium",
+      "timeline_start": "2025-12-08",
+      "timeline_end": "2025-12-14",
+      "objective": "",
+      "solution": "",
+      "business_impact": "",
+      "technical_impact": "",
+      "risks": "",
+      "next_steps": "",
+      "work_items": [
+        {
+          "id": 583,
+          "title": "Update validation script",
+          "type": "Task",
+          "state": "Active",
+          "url": "AB#583"
+        }
+      ],
+      "commits": [],
+      "parent_id": null,
+      "created_at": "2025-12-11T20:08:15.016977Z",
+      "updated_at": "2025-12-11T20:08:15.016978Z",
+      "repository": null,
+      "tags": [],
+      "total_insertions": 0,
+      "total_deletions": 0,
+      "total_files_changed": 0
+    },
+    {
+      "id": "0c93efa9",
+      "title": "WSR Generator Enhancement",
+      "status": "Completed",
+      "domain": "Development",
+      "priority": "High",
+      "timeline_start": "2025-12-08",
+      "timeline_end": "2025-12-14",
+      "objective": "Add report saving to disk for manual email",
+      "solution": "",
+      "business_impact": "Enables manual email workflow until auto-send is working",
+      "technical_impact": "",
+      "risks": "",
+      "next_steps": "",
+      "work_items": [
+        {
+          "id": 585,
+          "title": "Test",
+          "type": null,
+          "state": null,
+          "url": "AB#585"
+        }
+      ],
+      "commits": [],
+      "parent_id": null,
+      "created_at": "2025-12-11T20:50:58.117020Z",
+      "updated_at": "2025-12-11T20:50:58.117024Z",
+      "repository": null,
+      "tags": [],
+      "total_insertions": 0,
+      "total_deletions": 0,
+      "total_files_changed": 0
+    }
+  ]
+}
