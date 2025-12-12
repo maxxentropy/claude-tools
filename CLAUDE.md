@@ -250,3 +250,78 @@ pythonpath = ["."]
 - **Tests are isolated** - Each skill has its own `.venv` directory
 - **Dependencies are cached** - Subsequent runs skip install if deps haven't changed
 - **PYTHONPATH is set** - Local imports work automatically
+
+## Feature Branch Workflow
+
+Use the `feature` command for streamlined branch management with Azure DevOps integration.
+
+### Setup
+
+Add to your shell profile (`~/.zshrc` or `~/.bashrc`):
+
+```bash
+# Feature branch workflow
+alias feature="$HOME/source/tools/claude-tools/scripts/feature.sh"
+```
+
+Then reload: `source ~/.zshrc`
+
+### Quick Reference
+
+```bash
+feature start 1234              # Create branch from work item (auto-fetches title)
+feature start 1234 'add-login'  # Create with custom description
+feature pr                      # Push and create PR
+feature pr --draft              # Create draft PR
+feature status                  # Show branch/PR status
+feature finish                  # Merge PR and cleanup
+feature cleanup                 # Delete merged branches
+feature list                    # List feature branches and PRs
+```
+
+### Typical Workflow
+
+```bash
+# 1. Start work on a task
+feature start 1234
+# Creates: feature/AB#1234-task-title-from-ado
+
+# 2. Make changes, commit normally
+git add . && git commit -m "Add the feature"
+# Pre-commit hook auto-appends AB#1234
+
+# 3. Create PR when ready
+feature pr
+
+# 4. After review/approval, merge and cleanup
+feature finish
+```
+
+### Branch Naming
+
+The `feature start` command:
+1. Fetches work item title from Azure DevOps
+2. Slugifies it (lowercase, hyphens, truncated)
+3. Creates branch: `{prefix}/AB#{id}-{slug}`
+
+Prefixes by work item type:
+- `feature/` - User Stories, Features (default)
+- `fix/` - Bugs
+- `task/` - Tasks
+
+### Pre-commit Integration
+
+The workflow integrates with pre-commit hooks:
+- **Branch protection**: Prevents accidental commits to main
+- **Work item linking**: Auto-appends `AB#1234` to commit messages
+- **Secret detection**: Scans for leaked credentials
+
+Bypass when needed: `git commit --no-verify -m "message"`
+
+### For Agents
+
+When helping users with git workflows:
+1. **Use `feature start`** when beginning work on a work item
+2. **Use `feature pr`** when code is ready for review
+3. **Use `feature status`** to check current state
+4. **Remember**: Pre-commit hooks auto-link work items
