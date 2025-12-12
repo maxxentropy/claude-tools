@@ -200,3 +200,53 @@ gh --version                    # Check installed
 gh auth status                  # Check authentication
 gh auth login                   # Re-authenticate
 ```
+
+## Python Testing Workflow
+
+When running Python tests for skills or projects, use the universal test runner to handle virtual environment setup automatically.
+
+### Running Tests
+
+```bash
+# Run tests for a skill/project directory
+./scripts/run_python_tests.sh skills/azure-devops/scripts
+
+# Run with additional pytest arguments
+./scripts/run_python_tests.sh skills/azure-devops/scripts -v --tb=long
+./scripts/run_python_tests.sh skills/azure-devops/scripts -k "test_parse"
+./scripts/run_python_tests.sh skills/azure-devops/scripts --cov=.
+```
+
+### What the Test Runner Does
+
+1. **Detects dependency file** (`pyproject.toml` or `requirements.txt`)
+2. **Creates `.venv`** if it doesn't exist
+3. **Installs dependencies** (cached based on file checksum)
+4. **Runs pytest** with the project directory in PYTHONPATH
+
+### Adding Tests to a Skill
+
+1. Create `pyproject.toml` with test dependencies:
+```toml
+[project]
+name = "my-skill-scripts"
+version = "1.0.0"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+```
+
+2. Create `tests/` directory with `test_*.py` files
+3. Run: `./scripts/run_python_tests.sh skills/my-skill/scripts`
+
+### Key Points for Agents
+
+- **Always use the test runner** - Don't manually create venvs or run pytest directly
+- **Tests are isolated** - Each skill has its own `.venv` directory
+- **Dependencies are cached** - Subsequent runs skip install if deps haven't changed
+- **PYTHONPATH is set** - Local imports work automatically

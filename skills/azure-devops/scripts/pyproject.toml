@@ -1,0 +1,68 @@
+# pyproject.toml for Azure DevOps skill scripts
+# Note: These are standalone scripts, not a package. This file provides
+# pytest configuration and specifies test dependencies.
+
+[project]
+name = "azure-devops-skill-scripts"
+version = "1.0.0"
+description = "Azure DevOps integration scripts for Claude Code"
+requires-python = ">=3.9"
+
+# No runtime dependencies - all scripts use standard library only
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=24.0",
+    "ruff>=0.1.0",
+]
+
+# Disable build system - these are standalone scripts, not an installable package
+# The test runner will install test dependencies directly instead of using pip install -e
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+# Ensure local modules can be imported
+pythonpath = ["."]
+
+[tool.coverage.run]
+source = ["."]
+omit = ["tests/*", ".venv/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+]
