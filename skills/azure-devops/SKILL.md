@@ -333,9 +333,12 @@ az repos list --org "$ORG" --project "$PROJECT" --output table
 | Script | Purpose | Key Features |
 |--------|---------|--------------|
 | `ado_client.py` | REST API client | Batch operations, rate limiting, retry logic |
-| `query-work-items.py` | Query work items | Presets, batch fetch, table output |
+| `query-work-items.py` | Query work items | Presets, batch fetch, table output, **cache integration** |
 | `check-prerequisites.py` | Verify setup | CLI, extension, auth validation |
 | `discover-project.py` | Scan project | Areas, iterations, teams, pipelines |
+| `sync_work_items.py` | Sync to local index | Incremental/full sync, staleness detection |
+| `work_item_index.py` | Local index management | Cache storage, search, branch mapping |
+| `work_item_context.py` | Context detection | Branch parsing, commit parsing, auto-detection |
 
 ### ado_client.py Features
 
@@ -360,6 +363,262 @@ items = client.get_work_items_batch([1, 2, 3, 4, 5])
 items = client.query_work_items(
     "SELECT [System.Id] FROM workitems WHERE [System.AssignedTo] = @Me"
 )
+```
+
+## Work Item Index & Context (Local Caching)
+
+The work item index system provides **local caching** to avoid constant ADO API queries and enables **automatic context detection** from git branches.
+
+### Quick Start
+
+```bash
+# Sync work items to local cache
+python3 skills/azure-devops/scripts/sync_work_items.py
+
+# Check current work item context (auto-detects from branch)
+python3 skills/azure-devops/scripts/query-work-items.py --context
+
+# Search cached work items (no network required)
+python3 skills/azure-devops/scripts/query-work-items.py --search "auth bug"
+
+# Get work item from cache (fast, offline)
+python3 skills/azure-devops/scripts/query-work-items.py --id 1234 --cache-only
+```
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Work Item Context Flow                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   [Branch Name]  ─────────────────────────┐                     │
+│   feature/AB#1234-fix-auth               │                     │
+│                                           ▼                     │
+│   [Context Detector]                  [Index Manager]           │
+│   - Parse branch: AB#1234             - .ado/work-items.json    │
+│   - Check commit messages             - Cached work items        │
+│   - Check environment vars            - Branch mappings          │
+│                                           │                     │
+│                                           ▼                     │
+│   [Work Item Context]                                           │
+│   - ID: 1234                                                    │
+│   - Title: Fix authentication bug                               │
+│   - State: Active                                               │
+│   - Confidence: 100%                                            │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Syncing Work Items
+
+The `sync_work_items.py` script populates the local index from ADO:
+
+```bash
+# Smart sync (incremental if recent, full if stale)
+python3 skills/azure-devops/scripts/sync_work_items.py
+
+# Force full sync
+python3 skills/azure-devops/scripts/sync_work_items.py --full
+
+# Sync specific preset only
+python3 skills/azure-devops/scripts/sync_work_items.py --preset my-active
+
+# Show sync status
+python3 skills/azure-devops/scripts/sync_work_items.py --status
+
+# List available presets
+python3 skills/azure-devops/scripts/sync_work_items.py --presets
+```
+
+**Staleness Levels:**
+
+| Level | Age | Behavior |
+|-------|-----|----------|
+| `fresh` | < 1 hour | Skip sync (use `--full` to override) |
+| `recent` | 1-4 hours | Incremental sync |
+| `stale` | 4-24 hours | Incremental sync |
+| `very_stale` | > 24 hours | Full sync |
+| `never_synced` | N/A | Full sync |
+
+### Context Detection
+
+The system automatically detects work item context from:
+
+1. **Environment variable**: `ADO_WORK_ITEM_ID=1234`
+2. **Index mapping**: Branches explicitly linked to work items
+3. **Branch name parsing**: Extracts `AB#1234` from branch names
+4. **Commit messages**: Scans recent commits for work item references
+
+**Supported branch naming conventions:**
+
+```
+feature/AB#1234-description      # Best (explicit ADO reference)
+fix/AB#1234-short-desc           # Good
+bugfix/1234-description          # Acceptable (inferred)
+user/name/AB#1234/feature        # Supported
+AB#1234                          # Minimal
+1234-description                 # Least confident
+```
+
+**Check current context:**
+```bash
+python3 skills/azure-devops/scripts/query-work-items.py --context
+
+# Output:
+# Work Item: AB#1234
+#   Title: Fix authentication bug
+#   State: Active
+#   Type: Bug
+#   Assigned: user@example.com
+#   Source: branch_name
+#   Confidence: 100%
+#   Branch: feature/AB#1234-fix-auth
+```
+
+**Manually set context:**
+```bash
+python3 skills/azure-devops/scripts/work_item_context.py --set 1234
+```
+
+**Suggest branch name for work item:**
+```bash
+python3 skills/azure-devops/scripts/work_item_context.py --suggest-branch 1234
+# Output: feature/AB#1234-fix-authentication-bug
+```
+
+### Context-Aware Work Item Creation
+
+When you're on a branch like `feature/AB#1234-fix-auth` but the work item doesn't exist, the system will offer to create it:
+
+```bash
+# Check if detected work item exists
+python3 skills/azure-devops/scripts/work_item_context.py --check
+
+# Output if item doesn't exist:
+# Work Item: AB#1234
+#   Status: DOES NOT EXIST
+#
+#   Work item AB#1234 not found. Create it?
+#     Suggested title: Fix Auth
+#     Suggested type: Bug
+#
+#   To create, run:
+#     python3 work_item_context.py --create-from-branch
+```
+
+**Create from branch context (with confirmation):**
+```bash
+python3 skills/azure-devops/scripts/work_item_context.py --create-from-branch
+
+# Output:
+# Work item AB#1234 does not exist.
+#
+# Create new work item?
+#   Title: Fix Auth
+#   Type: Bug
+#   Branch: fix/AB#1234-fix-auth
+#
+# Create? [y/N]: y
+# Creating Bug: Fix Auth...
+# Created work item AB#1234
+# Linked to branch: fix/AB#1234-fix-auth
+```
+
+**Override title or type:**
+```bash
+python3 skills/azure-devops/scripts/work_item_context.py --create-from-branch \
+  --title "Fix authentication token refresh" \
+  --type "Task"
+```
+
+**Skip confirmation (for automation):**
+```bash
+python3 skills/azure-devops/scripts/work_item_context.py --create-from-branch --yes
+```
+
+**Type inference from branch prefix:**
+
+| Branch Prefix | Inferred Type |
+|---------------|---------------|
+| `fix/`, `bugfix/`, `hotfix/` | Bug |
+| `feature/` | User Story |
+| Other | Task |
+
+### Cache-First Query Mode
+
+The query script now supports cache-first lookups:
+
+```bash
+# Get by ID - checks cache first, fetches missing from ADO
+python3 skills/azure-devops/scripts/query-work-items.py --id 1234 1235 1236
+
+# Get by ID - cache only (no network, fast)
+python3 skills/azure-devops/scripts/query-work-items.py --id 1234 --cache-only
+
+# Search cached items by title/tags
+python3 skills/azure-devops/scripts/query-work-items.py --search "auth"
+
+# Update index after query
+python3 skills/azure-devops/scripts/query-work-items.py --preset my-active --update-index
+```
+
+### Index File Structure
+
+The index is stored in `.ado/work-items.json`:
+
+```json
+{
+  "version": "1.0",
+  "last_sync": "2024-01-15T10:30:00Z",
+  "organization": "https://dev.azure.com/org-name",
+  "project": "ProjectName",
+  "work_items": {
+    "1234": {
+      "id": 1234,
+      "title": "Fix authentication bug",
+      "state": "Active",
+      "work_item_type": "Bug",
+      "assigned_to": "user@example.com",
+      "tags": ["security", "P1"],
+      "last_fetched": "2024-01-15T10:30:00Z"
+    }
+  },
+  "branch_mappings": {
+    "feature/AB#1234-fix-auth": {
+      "work_item_id": 1234,
+      "created_at": "2024-01-15T09:00:00Z",
+      "commits": ["abc123", "def456"]
+    }
+  }
+}
+```
+
+### Workflow Integration
+
+**Recommended workflow when starting work:**
+
+```bash
+# 1. Sync your work items (do this periodically)
+python3 skills/azure-devops/scripts/sync_work_items.py
+
+# 2. Search for relevant work item
+python3 skills/azure-devops/scripts/query-work-items.py --search "auth bug" --format table
+
+# 3. Create branch with work item reference
+git checkout -b feature/AB#1234-fix-auth-bug
+
+# 4. Verify context is detected
+python3 skills/azure-devops/scripts/query-work-items.py --context
+```
+
+**When committing:**
+
+```bash
+# Include AB#1234 in commit message for automatic linking
+git commit -m "Fix token refresh logic AB#1234"
+
+# ADO will automatically link the commit to work item 1234
 ```
 
 ## Work Item Field Schema

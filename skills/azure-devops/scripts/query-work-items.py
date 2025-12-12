@@ -4,17 +4,22 @@ query-work-items.py - Query Azure DevOps work items with presets.
 
 Uses batch API for efficient work item retrieval (up to 200 per request).
 Includes rate limiting support and proper error handling.
+Integrates with local work item index for faster lookups.
 
 Usage:
     python query-work-items.py --config .ado/config.json --preset my-active
     python query-work-items.py --config .ado/config.json --wiql "SELECT ... FROM workitems WHERE ..."
     python query-work-items.py --config .ado/config.json --id 1234 1235 1236
     python query-work-items.py --config .ado/config.json --preset my-active --format table
+    python query-work-items.py --id 1234 --cache-only                        # Use cached data only
+    python query-work-items.py --context                                      # Show current work item context
 
 Best Practices:
     - Presets use optimized queries with date/range limiting
     - Batch API fetches work item details (no N+1 queries)
     - Rate limiting handled automatically with exponential backoff
+    - Use --cache-only for quick lookups without network calls
+    - Run sync_work_items.py periodically to keep cache fresh
 """
 
 from __future__ import annotations
@@ -36,6 +41,17 @@ try:
     HAS_CLIENT = True
 except ImportError:
     HAS_CLIENT = False
+
+# Import work item index modules
+try:
+    from work_item_index import WorkItemIndexManager, WorkItem, IndexStaleness
+    from work_item_context import (
+        WorkItemContextDetector, GitContext, BranchParser,
+        format_context_summary
+    )
+    HAS_INDEX = True
+except ImportError:
+    HAS_INDEX = False
 
 
 # Optimized query presets following Microsoft best practices:
@@ -381,6 +397,137 @@ def format_as_table(items: list[dict], columns: Optional[list[str]] = None) -> s
     return f"{header}\n{separator}\n" + "\n".join(rows)
 
 
+# ============================================================================
+# Cache/Index Functions
+# ============================================================================
+
+def work_item_to_dict(item: "WorkItem") -> dict:
+    """Convert WorkItem dataclass to dictionary for output."""
+    return {
+        "id": item.id,
+        "title": item.title,
+        "state": item.state,
+        "workItemType": item.work_item_type,
+        "assignedTo": item.assigned_to,
+        "areaPath": item.area_path,
+        "iterationPath": item.iteration_path,
+        "priority": item.priority,
+        "tags": ";".join(item.tags) if item.tags else None,
+        "parent": item.parent_id,
+        "url": item.url,
+        "changedDate": item.changed_date.isoformat() if item.changed_date else None,
+        "cached": True,
+        "lastFetched": item.last_fetched.isoformat() if item.last_fetched else None
+    }
+
+
+def get_cached_work_items(
+    index_manager: "WorkItemIndexManager",
+    ids: list[int]
+) -> tuple[list[dict], list[int]]:
+    """
+    Get work items from cache.
+
+    Returns:
+        Tuple of (found_items, missing_ids)
+    """
+    found = []
+    missing = []
+
+    for item_id in ids:
+        item = index_manager.get_work_item(item_id)
+        if item:
+            found.append(work_item_to_dict(item))
+        else:
+            missing.append(item_id)
+
+    return found, missing
+
+
+def search_cached_work_items(
+    index_manager: "WorkItemIndexManager",
+    query: str,
+    limit: int = 50
+) -> list[dict]:
+    """Search work items in cache."""
+    items = index_manager.search_items(query, limit=limit)
+    return [work_item_to_dict(item) for item in items]
+
+
+def show_context(index_path: str = ".ado/work-items.json", config_path: str = ".ado/config.json") -> int:
+    """Show current work item context and return exit code."""
+    if not HAS_INDEX:
+        print("Error: Work item index module not available", file=sys.stderr)
+        return 1
+
+    index_manager = WorkItemIndexManager(index_path)
+    detector = WorkItemContextDetector(index_manager)
+
+    # Use existence check to provide more helpful output
+    try:
+        from work_item_context import format_existence_check_summary
+        check_result = detector.detect_with_existence_check(config_path)
+        context = check_result["context"]
+        print(format_existence_check_summary(check_result))
+    except (ImportError, AttributeError):
+        # Fallback to basic context detection
+        context = detector.detect()
+        print(format_context_summary(context))
+
+    # Show staleness info
+    staleness = index_manager.get_staleness()
+    if staleness != IndexStaleness.FRESH:
+        print(f"\nNote: Index is {staleness.value}. Run sync_work_items.py to refresh.")
+
+    return 0 if context.has_context else 1
+
+
+def update_index_from_results(
+    index_manager: "WorkItemIndexManager",
+    items: list[dict]
+) -> int:
+    """
+    Update local index with query results.
+
+    Returns:
+        Number of items updated
+    """
+    count = 0
+    for item in items:
+        # Parse tags
+        tags = []
+        if item.get("tags"):
+            tags = [t.strip() for t in item["tags"].split(";") if t.strip()]
+
+        # Parse dates
+        changed_date = None
+        if item.get("changedDate"):
+            try:
+                changed_date = datetime.fromisoformat(item["changedDate"].replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                pass
+
+        work_item = WorkItem(
+            id=item.get("id", 0),
+            title=item.get("title", ""),
+            state=item.get("state", ""),
+            work_item_type=item.get("workItemType", ""),
+            assigned_to=item.get("assignedTo"),
+            area_path=item.get("areaPath"),
+            iteration_path=item.get("iterationPath"),
+            priority=item.get("priority"),
+            tags=tags,
+            parent_id=item.get("parent"),
+            url=item.get("url"),
+            last_fetched=datetime.utcnow(),
+            changed_date=changed_date
+        )
+        index_manager.upsert_work_item(work_item)
+        count += 1
+
+    return count
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Query Azure DevOps work items with presets or custom WIQL.",
@@ -391,6 +538,9 @@ Examples:
   %(prog)s --id 1234 1235 1236                 # Get specific work items
   %(prog)s --wiql "SELECT ... FROM workitems"  # Custom WIQL query
   %(prog)s --preset my-active --format table   # Display as table
+  %(prog)s --id 1234 --cache-only              # Get from cache only (no network)
+  %(prog)s --search "auth bug"                 # Search cached work items
+  %(prog)s --context                           # Show current work item context
         """
     )
     parser.add_argument("--config", "-c", default=".ado/config.json",
@@ -412,6 +562,19 @@ Examples:
     parser.add_argument("--max-results", "-n", type=int, default=200,
                         help="Maximum results to return (default: 200)")
 
+    # Cache/Index options
+    cache_group = parser.add_argument_group("Cache options")
+    cache_group.add_argument("--index", default=".ado/work-items.json",
+                             help="Path to work item index (default: .ado/work-items.json)")
+    cache_group.add_argument("--cache-only", action="store_true",
+                             help="Use cached data only, don't query ADO")
+    cache_group.add_argument("--update-index", action="store_true",
+                             help="Update local index with query results")
+    cache_group.add_argument("--search", "-s", metavar="QUERY",
+                             help="Search cached work items by title/tags")
+    cache_group.add_argument("--context", action="store_true",
+                             help="Show current work item context (from branch/commits)")
+
     args = parser.parse_args()
 
     # List presets
@@ -421,22 +584,120 @@ Examples:
             print(f"  {name:20} - {preset['description']}")
         return 0
 
-    # Load config
-    try:
-        config = json.loads(Path(args.config).read_text())
-    except FileNotFoundError:
-        print(f"Error: Config file not found: {args.config}", file=sys.stderr)
-        print("Run the configuration wizard first or create .ado/config.json", file=sys.stderr)
-        return 1
-    except json.JSONDecodeError as e:
-        print(f"Error: Invalid JSON in config file: {e}", file=sys.stderr)
-        return 1
+    # Show context (checks ADO if work item not in cache)
+    if args.context:
+        return show_context(args.index, args.config)
+
+    # Initialize index manager if available
+    index_manager = None
+    if HAS_INDEX:
+        index_manager = WorkItemIndexManager(args.index)
+
+    # Handle cache-only operations that don't need ADO config
+    if args.search:
+        if not index_manager:
+            print("Error: Work item index module not available", file=sys.stderr)
+            return 1
+        results = search_cached_work_items(index_manager, args.search, limit=args.max_results)
+        if not results:
+            print(f"No cached items matching '{args.search}'", file=sys.stderr)
+            staleness = index_manager.get_staleness()
+            if staleness in (IndexStaleness.NEVER_SYNCED, IndexStaleness.VERY_STALE):
+                print("Tip: Run sync_work_items.py to populate the cache", file=sys.stderr)
+            return 0
+
+        # Format and output
+        if args.format == "table":
+            output_str = format_as_table(results)
+        else:
+            output = {
+                "source": "cache",
+                "query": args.search,
+                "queryTime": datetime.utcnow().isoformat() + "Z",
+                "count": len(results),
+                "items": results
+            }
+            output_str = json.dumps(output, indent=2, default=str)
+
+        if args.output:
+            Path(args.output).write_text(output_str)
+            print(f"Results written to {args.output}", file=sys.stderr)
+        else:
+            print(output_str)
+
+        print(f"\nFound {len(results)} cached work item(s)", file=sys.stderr)
+        return 0
+
+    # Handle cache-only ID lookup
+    if args.cache_only and args.id:
+        if not index_manager:
+            print("Error: Work item index module not available", file=sys.stderr)
+            return 1
+
+        results, missing = get_cached_work_items(index_manager, args.id)
+
+        if missing:
+            print(f"Warning: {len(missing)} item(s) not in cache: {missing}", file=sys.stderr)
+
+        if args.format == "table":
+            output_str = format_as_table(results)
+        else:
+            output = {
+                "source": "cache",
+                "queryTime": datetime.utcnow().isoformat() + "Z",
+                "count": len(results),
+                "missing": missing,
+                "items": results
+            }
+            output_str = json.dumps(output, indent=2, default=str)
+
+        if args.output:
+            Path(args.output).write_text(output_str)
+        else:
+            print(output_str)
+
+        print(f"\nFound {len(results)} cached work item(s)", file=sys.stderr)
+        return 0
+
+    # For other operations, we need config
+    config = None
+    if not args.cache_only:
+        try:
+            config = json.loads(Path(args.config).read_text())
+        except FileNotFoundError:
+            print(f"Error: Config file not found: {args.config}", file=sys.stderr)
+            print("Run the configuration wizard first or create .ado/config.json", file=sys.stderr)
+            return 1
+        except json.JSONDecodeError as e:
+            print(f"Error: Invalid JSON in config file: {e}", file=sys.stderr)
+            return 1
 
     # Execute query
     results: list[dict] = []
+    from_cache = False
 
     if args.id:
-        results = get_work_items_batch(config, args.id, verbose=args.verbose)
+        # Try cache first for ID lookups
+        if index_manager and not args.cache_only:
+            cached, missing = get_cached_work_items(index_manager, args.id)
+            if not missing:
+                # All items found in cache
+                results = cached
+                from_cache = True
+                if args.verbose:
+                    print("All items found in cache", file=sys.stderr)
+            elif cached and missing:
+                # Partial cache hit - fetch only missing from ADO
+                if args.verbose:
+                    print(f"Cache hit: {len(cached)}, fetching {len(missing)} from ADO", file=sys.stderr)
+                remote_results = get_work_items_batch(config, missing, verbose=args.verbose)
+                results = cached + remote_results
+            else:
+                # Cache miss - fetch all from ADO
+                results = get_work_items_batch(config, args.id, verbose=args.verbose)
+        else:
+            results = get_work_items_batch(config, args.id, verbose=args.verbose)
+
     elif args.preset:
         preset = QUERY_PRESETS[args.preset]
         results = query_work_items(
@@ -448,26 +709,37 @@ Examples:
         if len(results) > args.max_results:
             results = results[:args.max_results]
             print(f"Note: Results limited to {args.max_results} items", file=sys.stderr)
+
     elif args.wiql:
         results = query_work_items(config, args.wiql, verbose=args.verbose)
         if len(results) > args.max_results:
             results = results[:args.max_results]
+
     else:
         parser.print_help()
-        print("\nError: Specify --preset, --wiql, or --id", file=sys.stderr)
+        print("\nError: Specify --preset, --wiql, --id, --search, or --context", file=sys.stderr)
         return 1
+
+    # Update index with results if requested
+    if args.update_index and index_manager and results and not from_cache:
+        updated = update_index_from_results(index_manager, results)
+        index_manager.save()
+        if args.verbose:
+            print(f"Updated {updated} items in local index", file=sys.stderr)
 
     # Format output
     if args.format == "table":
         output_str = format_as_table(results)
     else:
         output = {
-            "organization": config["organization"],
-            "project": config["project"],
+            "source": "cache" if from_cache else "ado",
             "queryTime": datetime.utcnow().isoformat() + "Z",
             "count": len(results),
             "items": results
         }
+        if config:
+            output["organization"] = config.get("organization")
+            output["project"] = config.get("project")
         output_str = json.dumps(output, indent=2, default=str)
 
     # Write output
@@ -477,7 +749,8 @@ Examples:
     else:
         print(output_str)
 
-    print(f"\nFound {len(results)} work item(s)", file=sys.stderr)
+    source_note = " (from cache)" if from_cache else ""
+    print(f"\nFound {len(results)} work item(s){source_note}", file=sys.stderr)
     return 0
 
 
