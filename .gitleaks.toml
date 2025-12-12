@@ -1,0 +1,96 @@
+# Gitleaks configuration
+# https://github.com/gitleaks/gitleaks
+#
+# This file customizes secret detection for this repository.
+# Gitleaks uses built-in rules by default; this file adds allowlists
+# and custom rules specific to this project.
+
+[extend]
+# Use the default gitleaks config as base
+useDefault = true
+
+# =============================================================================
+# Global Allowlist - paths/files to ignore entirely
+# =============================================================================
+[allowlist]
+description = "Global allowlist"
+
+paths = [
+    # Lock files often contain hashes that look like secrets
+    '''package-lock\.json$''',
+    '''yarn\.lock$''',
+    '''Pipfile\.lock$''',
+    '''poetry\.lock$''',
+    '''packages\.lock\.json$''',
+
+    # Build outputs
+    '''bin/''',
+    '''obj/''',
+    '''dist/''',
+    '''build/''',
+    '''node_modules/''',
+    '''\.nuget/''',
+
+    # Test fixtures (may contain example/fake credentials)
+    '''test[s]?/fixtures/''',
+    '''__tests__/''',
+    '''\.test\.(ts|js)$''',
+    '''\.spec\.(ts|js)$''',
+
+    # IDE and tool configs
+    '''\.idea/''',
+    '''\.vscode/''',
+    '''\.vs/''',
+
+    # This config file itself
+    '''\.gitleaks\.toml$''',
+]
+
+# Regex patterns for commits to ignore (e.g., merge commits)
+commits = [
+    '''(?i)^merge''',
+]
+
+# =============================================================================
+# Rule-specific allowlists
+# =============================================================================
+
+# Azure DevOps organization URLs are not secrets
+[[rules]]
+id = "ado-org-url"
+description = "Azure DevOps organization URL (not a secret)"
+regex = '''https://dev\.azure\.com/[\w-]+'''
+secretGroup = 0
+allowlist = { regexTarget = "match" }
+
+# Example/placeholder values in documentation
+[[rules]]
+id = "example-values"
+description = "Example placeholder values"
+regex = '''(?i)(example|placeholder|your[-_]?|my[-_]?|test[-_]?)(api[-_]?key|password|secret|token)'''
+secretGroup = 0
+allowlist = { regexTarget = "match" }
+
+# =============================================================================
+# Custom rules (add project-specific patterns here)
+# =============================================================================
+
+# Detect hardcoded Azure connection strings (beyond defaults)
+# [[rules]]
+# id = "azure-connection-string"
+# description = "Azure connection string"
+# regex = '''(?i)(DefaultEndpointsProtocol|AccountName|AccountKey|SharedAccessSignature)=[\w+/=]+'''
+# secretGroup = 0
+# tags = ["azure", "connection-string"]
+
+# =============================================================================
+# Allowlist specific findings (use sparingly - prefer fixing the code)
+# =============================================================================
+# To allowlist a specific finding, add it here after running gitleaks:
+#
+# [[rules]]
+# id = "specific-false-positive"
+# description = "Known false positive in specific file"
+# path = '''path/to/file\.py'''
+# regex = '''the-exact-pattern-that-matched'''
+# allowlist = { regexTarget = "match" }

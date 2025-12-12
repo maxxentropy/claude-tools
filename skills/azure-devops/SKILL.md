@@ -341,6 +341,7 @@ az repos list --org "$ORG" --project "$PROJECT" --output table
 | `work_item_context.py` | Context detection | Branch parsing, commit parsing, auto-detection, **area suggestion** |
 | `area_analyzer.py` | Codebase analysis | Component detection, architecture patterns |
 | `area_advisor.py` | Area recommendations | Compare code vs ADO areas, anti-patterns, health scores |
+| `commit_msg_hook.py` | Git commit-msg hook | Auto-links commits to work items from branch context |
 
 ### ado_client.py Features
 
@@ -855,6 +856,168 @@ python3 skills/azure-devops/scripts/area_advisor.py > .ado/area-recommendations.
 # 4. Work items will now auto-suggest areas based on code context
 python3 skills/azure-devops/scripts/work_item_context.py --create-from-branch
 ```
+
+## Git Hooks Integration
+
+Automate ADO work item linking and enforce code quality with git hooks using the [pre-commit framework](https://pre-commit.com).
+
+### Quick Setup
+
+```bash
+# 1. Install pre-commit
+pip install pre-commit
+# Or: brew install pre-commit
+
+# 2. Install hooks (from repo root with .pre-commit-config.yaml)
+pre-commit install
+pre-commit install --hook-type commit-msg
+
+# 3. (Optional) Run against all files to verify setup
+pre-commit run --all-files
+```
+
+### What the Hooks Do
+
+| Hook | Stage | Purpose |
+|------|-------|---------|
+| **ado-work-item-link** | commit-msg | Auto-appends `AB#1234` to commits based on branch name |
+| **gitleaks** | pre-commit | Detects secrets/credentials before they're committed |
+| **check-added-large-files** | pre-commit | Prevents commits with files > 1MB |
+| **check-merge-conflict** | pre-commit | Catches forgotten merge conflict markers |
+| **no-commit-to-branch** | pre-commit | Prevents direct commits to main/master |
+| **trailing-whitespace** | pre-commit | Auto-removes trailing whitespace |
+| **end-of-file-fixer** | pre-commit | Ensures files end with newline |
+
+### Automatic Work Item Linking
+
+The `ado-work-item-link` hook automatically links commits to work items:
+
+**How it works:**
+1. Checks if commit message already contains `AB#1234`
+2. If not, extracts work item ID from branch name
+3. Auto-appends reference to commit message
+
+**Supported branch formats:**
+```
+feature/AB#1234-description     → Appends AB#1234
+fix/AB#1234-short-desc          → Appends AB#1234
+bugfix/1234-description         → Appends AB#1234
+user/name/AB#1234/feature       → Appends AB#1234
+```
+
+**Exempt branches (no work item required):**
+- `main`, `master`, `develop`, `release`
+- Branches starting with `release/`, `hotfix/`, `dependabot/`, `renovate/`
+
+**Example output:**
+```bash
+$ git commit -m "Fix token refresh logic"
+✓ Auto-linked to AB#1234 (from branch: feature/AB#1234-auth-fix)
+
+$ git log -1 --oneline
+a1b2c3d Fix token refresh logic
+
+AB#1234
+```
+
+### Secret Detection
+
+The `gitleaks` hook scans for accidentally committed secrets:
+
+- API keys, tokens, passwords
+- AWS, Azure, GCP credentials
+- Private keys, certificates
+- Connection strings
+
+**Configuration:** Customize detection in `.gitleaks.toml`:
+
+```toml
+# Allowlist specific paths
+[allowlist]
+paths = [
+    '''test[s]?/fixtures/''',
+    '''\.test\.(ts|js)$''',
+]
+
+# Allowlist specific patterns
+[[rules]]
+id = "example-values"
+regex = '''(?i)example[-_]?(api[-_]?key|password)'''
+allowlist = { regexTarget = "match" }
+```
+
+### Skipping Hooks (Use Sparingly)
+
+```bash
+# Skip all hooks for a single commit
+git commit --no-verify -m "WIP: work in progress"
+
+# Skip specific hook
+SKIP=gitleaks git commit -m "Add test fixtures with fake creds"
+```
+
+### Enabling Optional Hooks
+
+The `.pre-commit-config.yaml` includes commented-out hooks for:
+
+**.NET projects:**
+```yaml
+# Uncomment in .pre-commit-config.yaml
+- id: dotnet-format
+  entry: dotnet format --verify-no-changes
+- id: dotnet-build
+  stages: [pre-push]  # Only on push, not every commit
+```
+
+**Python projects:**
+```yaml
+- repo: https://github.com/psf/black
+  hooks:
+    - id: black
+```
+
+**JavaScript/TypeScript:**
+```yaml
+- repo: https://github.com/pre-commit/mirrors-eslint
+  hooks:
+    - id: eslint
+```
+
+### Troubleshooting
+
+**Hook not running:**
+```bash
+# Verify hooks are installed
+ls -la .git/hooks/
+# Should show pre-commit and commit-msg symlinks
+
+# Reinstall if needed
+pre-commit install --hook-type commit-msg
+pre-commit install
+```
+
+**Gitleaks false positive:**
+```bash
+# Run gitleaks manually to see details
+gitleaks detect --source . --verbose
+
+# Add to .gitleaks.toml allowlist if truly false positive
+```
+
+**Work item hook not detecting branch:**
+```bash
+# Check branch name format
+git branch --show-current
+
+# Test the hook directly
+python3 skills/azure-devops/scripts/commit_msg_hook.py .git/COMMIT_EDITMSG
+```
+
+### Scripts Reference
+
+| Script | Purpose |
+|--------|---------|
+| `commit_msg_hook.py` | Git commit-msg hook for auto-linking work items |
 
 ## WIQL Quick Reference
 
