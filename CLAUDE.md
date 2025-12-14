@@ -20,6 +20,7 @@ Skills extend Claude Code with specialized workflows. Each skill has YAML frontm
 | github | Issues, pull requests, repositories via GitHub CLI | `skills/github/` |
 | wsr-generator | Weekly status reports from git and ADO activity | `skills/wsr-generator/` |
 | ui-design-team | Cross-platform UI design and implementation | `skills/ui-design-team/` |
+| xtconnect-pi | Debug/manage XTConnect Raspberry Pi nodes - SSH, serial port, deployment | `skills/xtconnect-pi/` |
 
 ## Installed Agents
 
@@ -79,6 +80,9 @@ Agents provide expert personas for complex reasoning tasks. Located in `agents/`
 | "Create a threat model" | `security-engineer` | Agent |
 | "Generate documentation" | `docgen` | Skill |
 | "Create work items" | `azure-devops` / `github` | Skill |
+| "Connect to Pi" / "Debug Pi node" | `xtconnect-pi` | Skill |
+| "Check serial port" / "Monitor RS-485" | `xtconnect-pi` | Skill |
+| "Verify master image" / "Check deployment" | `xtconnect-pi` | Skill |
 
 ## Skills vs Agents
 

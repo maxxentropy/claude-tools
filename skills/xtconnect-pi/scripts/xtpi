@@ -1,0 +1,991 @@
+#!/usr/bin/env python3
+"""
+xtpi - Unified CLI for XTConnect Raspberry Pi node management.
+
+Usage:
+    xtpi discover                    # Find nodes on network
+    xtpi connect <hostname>          # Set current node context
+    xtpi status                      # Show current node status
+    xtpi test                        # Test connection to current node
+    xtpi serial [--live|--raw|--status]  # Serial port operations
+    xtpi logs [--follow] [--lines N] # View container logs
+    xtpi deploy [--build]            # Deploy to current node
+    xtpi fleet                       # Show all known nodes
+    xtpi config [--diff|--push|--pull]   # Configuration management
+    xtpi ssh                         # Open SSH session to current node
+    xtpi restart                     # Restart container on current node
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+# Add scripts directory to path
+SCRIPT_DIR = Path(__file__).parent.resolve()
+sys.path.insert(0, str(SCRIPT_DIR))
+
+from pi_client import PiClient, discover_nodes, resolve_hostname, NodeInfo
+from node_context import (
+    load_context, save_context, find_context_dir, get_default_ssh_key,
+    get_current_hostname, Colors, color
+)
+
+
+def get_client(context: dict, hostname: Optional[str] = None) -> tuple[PiClient, str]:
+    """Get a PiClient for the specified or current hostname."""
+    hostname = hostname or get_current_hostname()
+    if not hostname:
+        print(color("No node connected. Use 'xtpi connect <hostname>' first.", Colors.RED))
+        sys.exit(1)
+
+    # Normalize hostname
+    if not hostname.endswith(".local") and "." not in hostname:
+        hostname = f"xtconnect-{hostname}.local"
+    elif not hostname.endswith(".local"):
+        hostname = f"{hostname}.local"
+    if not hostname.startswith("xtconnect-") and "xtconnect" not in hostname:
+        hostname = f"xtconnect-{hostname}"
+
+    ssh_config = context.get("ssh_config", {})
+    client = PiClient(
+        hostname=hostname,
+        user=ssh_config.get("user", "pi"),
+        key_path=os.path.expanduser(ssh_config.get("key_path", get_default_ssh_key())),
+        timeout=ssh_config.get("timeout", 10)
+    )
+    return client, hostname
+
+
+# ============================================================================
+# Commands
+# ============================================================================
+
+def cmd_discover(args):
+    """Discover XTConnect nodes on the network."""
+    print("Discovering XTConnect nodes...")
+    print(color("(Checking mDNS, ARP cache, and known nodes)", Colors.DIM))
+    print()
+
+    context = load_context()
+    nodes = discover_nodes(timeout=args.timeout)
+    found_hostnames = {n.hostname for n in nodes}
+
+    # Check recent nodes from context
+    for recent in context.get("recent_nodes", []):
+        hostname = recent.get("hostname")
+        if hostname and hostname not in found_hostnames:
+            ip = resolve_hostname(hostname)
+            if ip:
+                found_hostnames.add(hostname)
+                node_id = hostname.replace("xtconnect-", "").replace(".local", "")
+                nodes.append(NodeInfo(
+                    hostname=hostname,
+                    node_id=node_id,
+                    node_type="master" if node_id == "master" else "production",
+                    online=True,
+                    ip_address=ip
+                ))
+
+    # Try subnet scan if requested
+    if args.scan and not nodes:
+        print("Scanning subnet for Raspberry Pi devices...")
+        nodes.extend(scan_subnet_for_pis())
+
+    if not nodes:
+        print(color("No nodes found.", Colors.YELLOW))
+        print("\nTips:")
+        print("  - Ensure Pi is powered on and on the same network")
+        print("  - Try: xtpi connect <hostname>")
+        print("  - Try: xtpi discover --scan (slower, scans subnet)")
+        return 1
+
+    # Get current node for marking
+    current = context.get("current_node", {}).get("hostname")
+
+    print(f"{color('Discovered Nodes:', Colors.BOLD)}")
+    print()
+    print(f"  {'HOSTNAME':<35} {'TYPE':<12} {'STATUS':<10} {'IP':<15}")
+    print(f"  {'-'*35} {'-'*12} {'-'*10} {'-'*15}")
+
+    for node in nodes:
+        marker = " *" if node.hostname == current else "  "
+        node_type = "Master" if node.node_type == "master" else "Production"
+        status = color("ONLINE", Colors.GREEN) if node.online else color("OFFLINE", Colors.RED)
+        ip = node.ip_address or "-"
+        print(f"{marker}{node.hostname:<35} {node_type:<12} {status:<10} {ip:<15}")
+
+    print()
+    print(f"Total: {len(nodes)} node(s)")
+    if current:
+        print(f"* = current node")
+    return 0
+
+
+def cmd_connect(args):
+    """Connect to a node (set as current context)."""
+    context = load_context()
+    hostname = args.hostname
+
+    # Handle special cases
+    if hostname == "-":
+        # Switch to previous node
+        recent = context.get("recent_nodes", [])
+        current = context.get("current_node", {}).get("hostname")
+        for node in recent:
+            if node.get("hostname") != current:
+                hostname = node["hostname"]
+                break
+        else:
+            print(color("No previous node in history.", Colors.YELLOW))
+            return 1
+
+    # Normalize hostname
+    if not hostname.endswith(".local") and "." not in hostname:
+        hostname = f"xtconnect-{hostname}.local"
+
+    client, hostname = get_client(context, hostname)
+
+    print(f"Connecting to {color(hostname, Colors.CYAN)}...")
+    connected, msg = client.test_connection()
+
+    if connected:
+        print(f"  SSH: {color('✓', Colors.GREEN)} Connected")
+
+        # Get node info
+        node_info = client.get_node_info()
+        node_id = node_info.get("nodeId", hostname.replace("xtconnect-", "").replace(".local", "")) if node_info else hostname.replace("xtconnect-", "").replace(".local", "")
+
+        # Update context
+        now = datetime.now().astimezone().isoformat()
+        context["current_node"] = {
+            "hostname": hostname,
+            "node_id": node_id,
+            "last_connected": now,
+            "connection_status": "connected"
+        }
+
+        # Update recent nodes
+        recent = [n for n in context.get("recent_nodes", []) if n.get("hostname") != hostname]
+        recent.insert(0, {"hostname": hostname, "last_connected": now})
+        context["recent_nodes"] = recent[:10]
+
+        save_context(context)
+        print(f"\n{color('Connected to', Colors.GREEN)} {color(hostname, Colors.CYAN)}")
+        print(f"  Node ID: {node_id}")
+    else:
+        print(f"  SSH: {color('✗', Colors.RED)} {msg}")
+        print(color("\nConnection failed. Check hostname and SSH key.", Colors.RED))
+        return 1
+
+    return 0
+
+
+def cmd_status(args):
+    """Show status of current node."""
+    context = load_context()
+    client, hostname = get_client(context)
+
+    connected, msg = client.test_connection()
+    if not connected:
+        print(color(f"Cannot connect to {hostname}: {msg}", Colors.RED))
+        return 1
+
+    print(f"{color('Node Status:', Colors.BOLD)} {color(hostname, Colors.CYAN)}")
+    print("=" * 55)
+
+    # Node info
+    node_info = client.get_node_info()
+    if node_info:
+        print(f"\n{color('Identity:', Colors.BOLD)}")
+        print(f"  Node ID: {node_info.get('nodeId', 'Unknown')}")
+        print(f"  Hostname: {node_info.get('hostname', 'Unknown')}")
+        if node_info.get('serialNumber'):
+            print(f"  Pi Serial: {node_info.get('serialNumber')}")
+
+    # Container
+    print(f"\n{color('Container:', Colors.BOLD)}")
+    containers = client.docker_ps()
+    container = next((c for c in containers if "xtconnect" in c.name.lower()), None)
+    if container:
+        health = client.docker_health(container.name)
+        health_str = f" ({health})" if health else ""
+        print(f"  Name: {container.name}")
+        print(f"  Status: {color('RUNNING', Colors.GREEN)}{health_str}")
+        print(f"  Uptime: {container.uptime}")
+    else:
+        print(f"  Status: {color('NOT RUNNING', Colors.RED)}")
+
+    # Serial port
+    print(f"\n{color('Serial Port:', Colors.BOLD)}")
+    port = client.get_serial_port_status()
+    if port.exists:
+        status = "OPEN" if port.is_open else "AVAILABLE"
+        print(f"  Device: {port.device_path} → {port.symlink_target}")
+        print(f"  Status: {status}")
+    else:
+        print(f"  Status: {color('NOT FOUND', Colors.RED)}")
+
+    # System resources
+    print(f"\n{color('System:', Colors.BOLD)}")
+    uptime = client.get_uptime()
+    if uptime:
+        print(f"  Uptime: {uptime}")
+
+    memory = client.get_memory_usage()
+    if memory:
+        used = memory.get("used_mb", 0)
+        total = memory.get("total_mb", 0)
+        pct = (used / total * 100) if total else 0
+        print(f"  Memory: {used} MB / {total} MB ({pct:.0f}%)")
+
+    disk = client.get_disk_usage()
+    if disk:
+        print(f"  Disk: {disk.get('used')} / {disk.get('total')} ({disk.get('use_percent')} used)")
+
+    cpu = client.get_cpu_usage()
+    if cpu is not None:
+        print(f"  CPU: {cpu:.1f}%")
+
+    return 0
+
+
+def cmd_test(args):
+    """Test connection to current node."""
+    context = load_context()
+    client, hostname = get_client(context, args.hostname)
+
+    print(f"Testing connection to {color(hostname, Colors.CYAN)}...")
+    print()
+
+    # SSH
+    connected, msg = client.test_connection()
+    if connected:
+        print(f"  SSH: {color('✓', Colors.GREEN)} Connected")
+    else:
+        print(f"  SSH: {color('✗', Colors.RED)} {msg}")
+        return 1
+
+    # Docker
+    docker_status = client.check_service_status("docker")
+    if docker_status.get("active"):
+        print(f"  Docker: {color('✓', Colors.GREEN)} Running")
+    else:
+        print(f"  Docker: {color('✗', Colors.RED)} Not running")
+
+    # Container
+    containers = client.docker_ps()
+    container = next((c for c in containers if "xtconnect" in c.name.lower()), None)
+    if container:
+        health = client.docker_health(container.name)
+        health_str = f" ({health})" if health else ""
+        print(f"  Container: {color('✓', Colors.GREEN)} {container.name}{health_str}")
+    else:
+        print(f"  Container: {color('✗', Colors.YELLOW)} Not running")
+
+    # Serial
+    port = client.get_serial_port_status()
+    if port.exists:
+        status = "OPEN" if port.is_open else "AVAILABLE"
+        target = f" → {port.symlink_target}" if port.symlink_target else ""
+        print(f"  Serial: {color('✓', Colors.GREEN)} {port.device_path} ({status}){target}")
+    else:
+        print(f"  Serial: {color('✗', Colors.YELLOW)} Not found")
+
+    print()
+    print(f"Connection Status: {color('HEALTHY', Colors.GREEN)}")
+    return 0
+
+
+def cmd_serial(args):
+    """Serial port operations."""
+    context = load_context()
+    client, hostname = get_client(context)
+
+    connected, msg = client.test_connection()
+    if not connected:
+        print(color(f"Cannot connect to {hostname}: {msg}", Colors.RED))
+        return 1
+
+    if args.raw:
+        # Open interactive serial session
+        print(f"Opening serial session to {hostname}...")
+        print("Use Ctrl+A then X to exit picocom, or Ctrl+] for screen")
+        print()
+
+        ssh_config = context.get("ssh_config", {})
+        key_path = os.path.expanduser(ssh_config.get("key_path", get_default_ssh_key()))
+
+        # Try picocom first, fall back to screen
+        cmd = [
+            "ssh", "-t",
+            "-i", key_path,
+            "-o", "StrictHostKeyChecking=accept-new",
+            f"pi@{hostname}",
+            "picocom -b 19200 /dev/xtconnect-serial || screen /dev/xtconnect-serial 19200"
+        ]
+        os.execvp("ssh", cmd)
+
+    elif args.dump:
+        # Raw hex dump
+        print(f"Dumping serial data from {hostname}...")
+        print("Press Ctrl+C to stop")
+        print("-" * 60)
+
+        ssh_config = context.get("ssh_config", {})
+        key_path = os.path.expanduser(ssh_config.get("key_path", get_default_ssh_key()))
+
+        cmd = [
+            "ssh", "-t",
+            "-i", key_path,
+            "-o", "StrictHostKeyChecking=accept-new",
+            f"pi@{hostname}",
+            "hexdump -C /dev/xtconnect-serial"
+        ]
+        try:
+            subprocess.run(cmd)
+        except KeyboardInterrupt:
+            print("\nStopped.")
+
+    elif args.live:
+        # Live monitoring via docker logs
+        print(f"Monitoring serial traffic on {hostname}...")
+        print("Press Ctrl+C to stop")
+        print("-" * 60)
+
+        ssh_config = context.get("ssh_config", {})
+        key_path = os.path.expanduser(ssh_config.get("key_path", get_default_ssh_key()))
+
+        cmd = [
+            "ssh",
+            "-i", key_path,
+            "-o", "StrictHostKeyChecking=accept-new",
+            f"pi@{hostname}",
+            "docker logs -f xtconnect-node-blue 2>&1 | grep -E --line-buffered '(TX|RX|Serial|→|←)'"
+        ]
+        try:
+            subprocess.run(cmd)
+        except KeyboardInterrupt:
+            print("\nStopped.")
+
+    else:
+        # Status (default)
+        print(f"{color('Serial Port Status:', Colors.BOLD)} {hostname}")
+        print()
+
+        port = client.get_serial_port_status()
+        if not port.exists:
+            print(f"  Device: {color(port.device_path, Colors.RED)}")
+            print(f"  Status: {color('NOT FOUND', Colors.RED)}")
+            print("\n  USB-serial adapter may not be connected")
+            return 1
+
+        print(f"  Device: {color(port.device_path, Colors.CYAN)}")
+        if port.symlink_target:
+            print(f"  Target: {port.symlink_target}")
+
+        status = color("OPEN", Colors.GREEN) if port.is_open else color("AVAILABLE", Colors.YELLOW)
+        print(f"  Status: {status}")
+        if port.owner_process:
+            print(f"  Owner: {port.owner_process}")
+        if port.device_info:
+            print(f"  Device: {port.device_info}")
+
+        # Config
+        config = client.get_app_config()
+        if config:
+            serial_config = config.get("NodeConfiguration", {}).get("SerialPort", {})
+            if serial_config:
+                print(f"\n{color('Configuration:', Colors.BOLD)}")
+                print(f"  Baud Rate: {serial_config.get('BaudRate', 19200)}")
+                print(f"  Port Name: {serial_config.get('PortName', '/dev/xtconnect-serial')}")
+
+    return 0
+
+
+def cmd_logs(args):
+    """View container logs."""
+    context = load_context()
+    client, hostname = get_client(context)
+
+    connected, msg = client.test_connection()
+    if not connected:
+        print(color(f"Cannot connect to {hostname}: {msg}", Colors.RED))
+        return 1
+
+    # Find container
+    containers = client.docker_ps()
+    container = next((c for c in containers if "xtconnect" in c.name.lower()), None)
+    if not container:
+        print(color("No xtconnect container running", Colors.RED))
+        return 1
+
+    ssh_config = context.get("ssh_config", {})
+    key_path = os.path.expanduser(ssh_config.get("key_path", get_default_ssh_key()))
+
+    cmd_parts = ["docker", "logs"]
+    if args.follow:
+        cmd_parts.append("-f")
+    cmd_parts.extend(["--tail", str(args.lines)])
+    cmd_parts.append(container.name)
+    cmd_parts.append("2>&1")
+
+    if args.level:
+        cmd_parts.append(f"| grep -i '{args.level}'")
+
+    remote_cmd = " ".join(cmd_parts)
+
+    ssh_cmd = [
+        "ssh",
+        "-i", key_path,
+        "-o", "StrictHostKeyChecking=accept-new",
+        f"pi@{hostname}",
+        remote_cmd
+    ]
+
+    try:
+        subprocess.run(ssh_cmd)
+    except KeyboardInterrupt:
+        print("\nStopped.")
+
+    return 0
+
+
+def cmd_deploy(args):
+    """Deploy to current node."""
+    context = load_context()
+    client, hostname = get_client(context)
+
+    # Find the nodeservice project
+    project_paths = [
+        Path.home() / "source/projects/xtconnect.nodeservice",
+        Path.cwd(),
+        Path.cwd().parent / "xtconnect.nodeservice",
+    ]
+
+    project_dir = None
+    for path in project_paths:
+        if (path / "deploy.sh").exists():
+            project_dir = path
+            break
+
+    if not project_dir:
+        print(color("Cannot find xtconnect.nodeservice project with deploy.sh", Colors.RED))
+        print("Run from the project directory or ensure ~/source/projects/xtconnect.nodeservice exists")
+        return 1
+
+    print(f"Deploying to {color(hostname, Colors.CYAN)}")
+    print(f"Project: {project_dir}")
+    print()
+
+    if args.build:
+        print(f"{color('Building...', Colors.BOLD)}")
+        build_cmd = ["./docker-build.sh"]
+        result = subprocess.run(build_cmd, cwd=project_dir)
+        if result.returncode != 0:
+            print(color("Build failed", Colors.RED))
+            return 1
+        print()
+
+    print(f"{color('Deploying...', Colors.BOLD)}")
+    deploy_cmd = ["./deploy.sh", hostname]
+    result = subprocess.run(deploy_cmd, cwd=project_dir)
+
+    if result.returncode == 0:
+        print()
+        print(color("Deployment successful!", Colors.GREEN))
+    else:
+        print(color("Deployment failed", Colors.RED))
+
+    return result.returncode
+
+
+def cmd_fleet(args):
+    """Show status of all known nodes."""
+    context = load_context()
+
+    print(f"{color('Fleet Status:', Colors.BOLD)}")
+    print("=" * 75)
+    print()
+
+    # Gather all known nodes
+    hostnames = set()
+
+    # From recent nodes
+    for node in context.get("recent_nodes", []):
+        if node.get("hostname"):
+            hostnames.add(node["hostname"])
+
+    # Current node
+    current = context.get("current_node", {}).get("hostname")
+    if current:
+        hostnames.add(current)
+
+    # Discover more
+    if args.discover:
+        print("Discovering additional nodes...")
+        discovered = discover_nodes(timeout=3)
+        for node in discovered:
+            hostnames.add(node.hostname)
+        print()
+
+    if not hostnames:
+        print(color("No known nodes. Use 'xtpi connect <hostname>' to add one.", Colors.YELLOW))
+        return 1
+
+    # Check each node in parallel
+    results = {}
+
+    def check_node(hostname):
+        ssh_config = context.get("ssh_config", {})
+        client = PiClient(
+            hostname=hostname,
+            user=ssh_config.get("user", "pi"),
+            key_path=os.path.expanduser(ssh_config.get("key_path", get_default_ssh_key())),
+            timeout=5
+        )
+
+        info = {"hostname": hostname, "online": False}
+
+        connected, _ = client.test_connection()
+        if not connected:
+            return info
+
+        info["online"] = True
+
+        # Get basic info
+        node_info = client.get_node_info()
+        if node_info:
+            info["node_id"] = node_info.get("nodeId", "")
+
+        # Container status
+        containers = client.docker_ps()
+        container = next((c for c in containers if "xtconnect" in c.name.lower()), None)
+        if container:
+            info["container"] = container.name
+            info["container_status"] = "RUNNING"
+            health = client.docker_health(container.name)
+            if health:
+                info["health"] = health
+        else:
+            info["container_status"] = "STOPPED"
+
+        # Uptime
+        uptime = client.get_uptime()
+        if uptime:
+            info["uptime"] = uptime.replace("up ", "")
+
+        return info
+
+    print(f"Checking {len(hostnames)} node(s)...")
+    print()
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(check_node, h): h for h in hostnames}
+        for future in as_completed(futures):
+            hostname = futures[future]
+            try:
+                results[hostname] = future.result()
+            except Exception as e:
+                results[hostname] = {"hostname": hostname, "online": False, "error": str(e)}
+
+    # Display results
+    print(f"  {'NODE ID':<12} {'HOSTNAME':<32} {'STATUS':<10} {'HEALTH':<10} {'UPTIME':<15}")
+    print(f"  {'-'*12} {'-'*32} {'-'*10} {'-'*10} {'-'*15}")
+
+    for hostname in sorted(hostnames):
+        info = results.get(hostname, {})
+        node_id = info.get("node_id", hostname.replace("xtconnect-", "").replace(".local", ""))[:12]
+
+        marker = "*" if hostname == current else " "
+
+        if info.get("online"):
+            status = color("ONLINE", Colors.GREEN)
+            health = info.get("health", "-")
+            if health == "healthy":
+                health = color("healthy", Colors.GREEN)
+            elif health == "unhealthy":
+                health = color("unhealthy", Colors.RED)
+            uptime = info.get("uptime", "-")[:15]
+        else:
+            status = color("OFFLINE", Colors.RED)
+            health = "-"
+            uptime = "-"
+
+        print(f"{marker} {node_id:<12} {hostname:<32} {status:<10} {health:<10} {uptime:<15}")
+
+    print()
+    print(f"Total: {len(hostnames)} node(s), {sum(1 for r in results.values() if r.get('online'))} online")
+    if current:
+        print(f"* = current node")
+
+    return 0
+
+
+def cmd_config(args):
+    """Configuration management."""
+    context = load_context()
+    client, hostname = get_client(context)
+
+    connected, msg = client.test_connection()
+    if not connected:
+        print(color(f"Cannot connect to {hostname}: {msg}", Colors.RED))
+        return 1
+
+    if args.pull:
+        # Pull config from node
+        print(f"Pulling configuration from {hostname}...")
+
+        output_dir = Path.cwd() / ".xtconnect" / "config"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        for config_file in ["appsettings.json", "node-info.json"]:
+            content = client.get_file(f"/data/config/{config_file}")
+            if content:
+                output_path = output_dir / config_file
+                output_path.write_text(content)
+                print(f"  ✓ {config_file} → {output_path}")
+            else:
+                print(f"  ✗ {config_file} not found")
+
+        print(f"\nConfiguration saved to {output_dir}")
+
+    elif args.diff:
+        # Compare remote vs local
+        print(f"Comparing configuration: {hostname} vs local")
+        print()
+
+        remote_config = client.get_app_config()
+        if not remote_config:
+            print(color("Cannot read remote appsettings.json", Colors.RED))
+            return 1
+
+        # Find local config
+        local_paths = [
+            Path.home() / "source/projects/xtconnect.nodeservice/src/XTConnect.Node/appsettings.json",
+            Path.cwd() / "src/XTConnect.Node/appsettings.json",
+            Path.cwd() / "appsettings.json",
+        ]
+
+        local_config = None
+        local_path = None
+        for path in local_paths:
+            if path.exists():
+                try:
+                    local_config = json.loads(path.read_text())
+                    local_path = path
+                    break
+                except json.JSONDecodeError:
+                    pass
+
+        if not local_config:
+            print(color("Cannot find local appsettings.json", Colors.YELLOW))
+            print("Showing remote config only:")
+            print(json.dumps(remote_config, indent=2))
+            return 0
+
+        print(f"Remote: {hostname}:/data/config/appsettings.json")
+        print(f"Local:  {local_path}")
+        print()
+
+        # Compare keys
+        def flatten_dict(d, prefix=""):
+            items = {}
+            for k, v in d.items():
+                key = f"{prefix}.{k}" if prefix else k
+                if isinstance(v, dict):
+                    items.update(flatten_dict(v, key))
+                else:
+                    items[key] = v
+            return items
+
+        remote_flat = flatten_dict(remote_config)
+        local_flat = flatten_dict(local_config)
+
+        all_keys = set(remote_flat.keys()) | set(local_flat.keys())
+
+        differences = []
+        for key in sorted(all_keys):
+            remote_val = remote_flat.get(key)
+            local_val = local_flat.get(key)
+
+            if remote_val != local_val:
+                differences.append((key, local_val, remote_val))
+
+        if differences:
+            print(f"{color('Differences found:', Colors.YELLOW)}")
+            print()
+            for key, local_val, remote_val in differences:
+                # Redact sensitive values
+                if any(s in key.lower() for s in ["token", "key", "secret", "password"]):
+                    local_val = "***" if local_val else None
+                    remote_val = "***" if remote_val else None
+                print(f"  {key}:")
+                print(f"    Local:  {local_val}")
+                print(f"    Remote: {remote_val}")
+        else:
+            print(color("Configurations match!", Colors.GREEN))
+
+    elif args.push:
+        print(color("Push not yet implemented (safety feature)", Colors.YELLOW))
+        print("To update config, SSH to the node and edit /data/config/appsettings.json")
+        return 1
+
+    else:
+        # Show remote config (default)
+        print(f"{color('Configuration:', Colors.BOLD)} {hostname}")
+        print()
+
+        print(f"{color('/data/config/appsettings.json:', Colors.CYAN)}")
+        config = client.get_app_config()
+        if config:
+            # Redact sensitive values
+            config_str = json.dumps(config, indent=2)
+            import re
+            config_str = re.sub(
+                r'"(BearerToken|ApiKey|Password|Secret)":\s*"[^"]*"',
+                r'"\1": "***REDACTED***"',
+                config_str
+            )
+            print(config_str)
+        else:
+            print(color("  Not found", Colors.YELLOW))
+
+        print()
+        print(f"{color('/data/config/node-info.json:', Colors.CYAN)}")
+        node_info = client.get_node_info()
+        if node_info:
+            print(json.dumps(node_info, indent=2))
+        else:
+            print(color("  Not found", Colors.YELLOW))
+
+    return 0
+
+
+def cmd_ssh(args):
+    """Open SSH session to current node."""
+    context = load_context()
+    _, hostname = get_client(context)
+
+    ssh_config = context.get("ssh_config", {})
+    key_path = os.path.expanduser(ssh_config.get("key_path", get_default_ssh_key()))
+    user = ssh_config.get("user", "pi")
+
+    print(f"Connecting to {color(hostname, Colors.CYAN)}...")
+    print("(Use 'exit' or Ctrl+D to disconnect)")
+    print()
+
+    cmd = [
+        "ssh",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-i", key_path,
+        f"{user}@{hostname}"
+    ]
+    os.execvp("ssh", cmd)
+
+
+def cmd_restart(args):
+    """Restart container on current node."""
+    context = load_context()
+    client, hostname = get_client(context)
+
+    connected, msg = client.test_connection()
+    if not connected:
+        print(color(f"Cannot connect to {hostname}: {msg}", Colors.RED))
+        return 1
+
+    containers = client.docker_ps()
+    container = next((c for c in containers if "xtconnect" in c.name.lower()), None)
+
+    if not container:
+        print(color("No xtconnect container found", Colors.RED))
+        return 1
+
+    print(f"Restarting {container.name} on {hostname}...")
+    if client.docker_restart(container.name):
+        print(color("Container restarted successfully", Colors.GREEN))
+        return 0
+    else:
+        print(color("Failed to restart container", Colors.RED))
+        return 1
+
+
+def scan_subnet_for_pis() -> list[NodeInfo]:
+    """Scan local subnet for Raspberry Pi devices."""
+    # This is a simplified scan - could be enhanced with nmap
+    nodes = []
+
+    # Get local IP to determine subnet
+    try:
+        result = subprocess.run(
+            ["ipconfig", "getifaddr", "en0"],
+            capture_output=True, text=True, timeout=5
+        )
+        if not result.stdout.strip():
+            return nodes
+        local_ip = result.stdout.strip()
+        subnet = ".".join(local_ip.split(".")[:3])
+    except:
+        return nodes
+
+    print(f"Scanning {subnet}.0/24 for Raspberry Pi devices...")
+
+    # Quick ping sweep (parallel)
+    def try_host(ip):
+        try:
+            result = subprocess.run(
+                ["ping", "-c", "1", "-W", "1", ip],
+                capture_output=True,
+                timeout=2
+            )
+            if result.returncode == 0:
+                # Try to resolve as xtconnect hostname
+                # Check ARP for Pi MAC
+                arp = subprocess.run(["arp", ip], capture_output=True, text=True, timeout=2)
+                if any(mac in arp.stdout.lower() for mac in ["b8:27:eb", "dc:a6:32", "e4:5f:01"]):
+                    return ip
+        except:
+            pass
+        return None
+
+    found_ips = []
+    with ThreadPoolExecutor(max_workers=50) as executor:
+        futures = [executor.submit(try_host, f"{subnet}.{i}") for i in range(1, 255)]
+        for future in as_completed(futures):
+            ip = future.result()
+            if ip:
+                found_ips.append(ip)
+                print(f"  Found Pi at {ip}")
+
+    # Try to resolve each to xtconnect hostname
+    for ip in found_ips:
+        try:
+            # Reverse DNS or try xtconnect pattern
+            result = subprocess.run(
+                ["host", ip],
+                capture_output=True, text=True, timeout=2
+            )
+            if "xtconnect" in result.stdout.lower():
+                import re
+                match = re.search(r'(xtconnect-\w+)', result.stdout.lower())
+                if match:
+                    hostname = f"{match.group(1)}.local"
+                    nodes.append(NodeInfo(
+                        hostname=hostname,
+                        node_id=match.group(1).replace("xtconnect-", ""),
+                        node_type="production",
+                        online=True,
+                        ip_address=ip
+                    ))
+        except:
+            pass
+
+    return nodes
+
+
+# ============================================================================
+# Main
+# ============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="XTConnect Pi Node Management CLI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  xtpi discover                  Find nodes on network
+  xtpi connect d9f50b55          Connect to node by ID
+  xtpi status                    Show current node status
+  xtpi serial --live             Monitor serial traffic
+  xtpi logs -f                   Follow container logs
+  xtpi fleet                     Show all known nodes
+        """
+    )
+
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+
+    # discover
+    p = subparsers.add_parser("discover", help="Discover nodes on network")
+    p.add_argument("--scan", action="store_true", help="Scan subnet for Pi devices (slower)")
+    p.add_argument("--timeout", type=int, default=5, help="Discovery timeout in seconds")
+
+    # connect
+    p = subparsers.add_parser("connect", help="Connect to a node")
+    p.add_argument("hostname", help="Node hostname or ID (or '-' for previous)")
+
+    # status
+    p = subparsers.add_parser("status", help="Show current node status")
+
+    # test
+    p = subparsers.add_parser("test", help="Test connection to node")
+    p.add_argument("hostname", nargs="?", help="Hostname to test (default: current)")
+
+    # serial
+    p = subparsers.add_parser("serial", help="Serial port operations")
+    p.add_argument("--status", action="store_true", help="Show port status (default)")
+    p.add_argument("--live", action="store_true", help="Monitor traffic via docker logs")
+    p.add_argument("--raw", action="store_true", help="Open interactive serial session")
+    p.add_argument("--dump", action="store_true", help="Raw hex dump from port")
+
+    # logs
+    p = subparsers.add_parser("logs", help="View container logs")
+    p.add_argument("-f", "--follow", action="store_true", help="Follow logs")
+    p.add_argument("-n", "--lines", type=int, default=50, help="Number of lines")
+    p.add_argument("--level", help="Filter by log level")
+
+    # deploy
+    p = subparsers.add_parser("deploy", help="Deploy to current node")
+    p.add_argument("--build", action="store_true", help="Build before deploying")
+
+    # fleet
+    p = subparsers.add_parser("fleet", help="Show status of all known nodes")
+    p.add_argument("--discover", action="store_true", help="Also discover new nodes")
+
+    # config
+    p = subparsers.add_parser("config", help="Configuration management")
+    p.add_argument("--diff", action="store_true", help="Compare remote vs local")
+    p.add_argument("--pull", action="store_true", help="Pull config from node")
+    p.add_argument("--push", action="store_true", help="Push config to node")
+
+    # ssh
+    p = subparsers.add_parser("ssh", help="Open SSH session")
+
+    # restart
+    p = subparsers.add_parser("restart", help="Restart container")
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        return 0
+
+    # Dispatch to command handler
+    commands = {
+        "discover": cmd_discover,
+        "connect": cmd_connect,
+        "status": cmd_status,
+        "test": cmd_test,
+        "serial": cmd_serial,
+        "logs": cmd_logs,
+        "deploy": cmd_deploy,
+        "fleet": cmd_fleet,
+        "config": cmd_config,
+        "ssh": cmd_ssh,
+        "restart": cmd_restart,
+    }
+
+    handler = commands.get(args.command)
+    if handler:
+        return handler(args)
+    else:
+        parser.print_help()
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

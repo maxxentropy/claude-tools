@@ -8,3 +8,6 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# XTConnect Pi skill context (local state)
+.xtconnect/
