@@ -21,6 +21,7 @@ Skills extend Claude Code with specialized workflows. Each skill has YAML frontm
 | wsr-generator | Weekly status reports from git and ADO activity | `skills/wsr-generator/` |
 | ui-design-team | Cross-platform UI design and implementation | `skills/ui-design-team/` |
 | xtconnect-pi | Debug/manage XTConnect Raspberry Pi nodes - SSH, serial port, deployment | `skills/xtconnect-pi/` |
+| findings | **Persistent memory** - Cross-session discoveries, tech debt, handoff notes | `skills/findings/` |
 
 ## Installed Agents
 
@@ -83,6 +84,9 @@ Agents provide expert personas for complex reasoning tasks. Located in `agents/`
 | "Connect to Pi" / "Debug Pi node" | `xtconnect-pi` | Skill |
 | "Check serial port" / "Monitor RS-485" | `xtconnect-pi` | Skill |
 | "Verify master image" / "Check deployment" | `xtconnect-pi` | Skill |
+| "Remember this" / "Capture finding" | `findings` | Skill |
+| "What did I find" / "Load context" | `findings` | Skill |
+| "Session handoff" / "Save session" | `findings` | Skill |
 
 ## Skills vs Agents
 
@@ -329,3 +333,127 @@ When helping users with git workflows:
 2. **Use `feature pr`** when code is ready for review
 3. **Use `feature status`** to check current state
 4. **Remember**: Pre-commit hooks auto-link work items
+
+## Session Continuity (Persistent Memory)
+
+The `findings` skill provides cross-session memory. **Use this to remember discoveries between conversations.**
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    THREE-TIER MEMORY MODEL                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  TodoWrite (Session)     Findings (Persistent)    ADO (Official) │
+│  ─────────────────────   ────────────────────    ─────────────── │
+│  • Task tracking         • Discoveries           • Work items    │
+│  • This conversation     • Tech debt             • Sprint work   │
+│  • Ephemeral             • Cross-session         • Team-visible  │
+│                          • Git-tracked           • Managed       │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### When to Use Each
+
+| Tool | When to Use |
+|------|-------------|
+| **TodoWrite** | Tracking tasks within THIS conversation (still use this!) |
+| **Findings** | Discoveries that should persist to next session |
+| **ADO Work Items** | Official work that needs team tracking |
+
+### Session Start Protocol
+
+At the beginning of significant work sessions, consider loading context:
+
+```bash
+# Load previous session context
+python3 skills/findings/scripts/session_context.py --load
+
+# See what's ready to work on
+python3 skills/findings/scripts/query_findings.py --ready
+```
+
+### During Session: Capture Discoveries
+
+When you discover something worth remembering:
+
+```bash
+python3 skills/findings/scripts/query_findings.py --capture \
+  --title "N+1 query in OrderService.GetAllWithDetails" \
+  --severity medium \
+  --type discovery \
+  --category performance \
+  --file "src/Services/OrderService.cs" \
+  --line 145
+```
+
+**Capture when you find:**
+- Performance issues (N+1 queries, inefficient algorithms)
+- Security concerns
+- Code smells or tech debt
+- Bugs that aren't immediate fixes
+- Architecture observations
+- Questions to investigate later
+
+### Session End Protocol
+
+Before ending a significant session, save context:
+
+```bash
+python3 skills/findings/scripts/session_context.py --save \
+  --notes "Fixed the N+1 in GetAll, still need to address GetHistory" \
+  --questions "Should we use Include() or explicit loading?"
+```
+
+### Findings → ADO Promotion
+
+When a finding should become official work:
+
+```bash
+# 1. Create ADO work item
+az boards work-item create --type "Task" --title "Fix N+1 query"
+
+# 2. Link finding to it
+python3 skills/findings/scripts/query_findings.py \
+  --promote f-abc123 --promote-to AB#5678
+```
+
+### Key Commands
+
+```bash
+# Query
+python3 skills/findings/scripts/query_findings.py --open      # Open findings
+python3 skills/findings/scripts/query_findings.py --ready     # Ready to work
+python3 skills/findings/scripts/query_findings.py --search X  # Search
+python3 skills/findings/scripts/query_findings.py --stats     # Statistics
+
+# Capture
+python3 skills/findings/scripts/query_findings.py --capture --title "..." --severity medium
+
+# Update
+python3 skills/findings/scripts/query_findings.py --resolve f-abc123
+python3 skills/findings/scripts/query_findings.py --promote f-abc123 --promote-to AB#1234
+
+# Session
+python3 skills/findings/scripts/session_context.py --load     # Start session
+python3 skills/findings/scripts/session_context.py --save     # End session
+python3 skills/findings/scripts/session_context.py --onboard  # Full context dump
+```
+
+### Integration with Reviews
+
+After architecture or code reviews, capture findings:
+
+```bash
+# During review, capture each significant finding
+python3 skills/findings/scripts/query_findings.py --capture \
+  --title "Thread safety issue in StateManager" \
+  --severity critical \
+  --type discovery \
+  --category thread-safety \
+  --during "architecture-review"
+```
+
+This ensures discoveries from reviews don't get lost between sessions.
