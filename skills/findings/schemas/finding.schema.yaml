@@ -1,0 +1,206 @@
+# Finding Schema
+# JSON Schema for findings stored in .findings/findings.jsonl
+#
+# Each line in findings.jsonl should validate against this schema.
+
+$schema: "http://json-schema.org/draft-07/schema#"
+title: Finding
+description: A persistent finding/discovery from a Claude Code session
+type: object
+
+required:
+  - id
+  - version
+  - title
+  - finding_type
+  - severity
+  - status
+  - created_at
+  - updated_at
+
+properties:
+  # Identity
+  id:
+    type: string
+    pattern: "^f-[a-f0-9]{8}$"
+    description: Hash-based unique identifier
+
+  version:
+    type: integer
+    minimum: 1
+    description: Version number (increments on update)
+
+  # Classification
+  title:
+    type: string
+    minLength: 1
+    maxLength: 500
+    description: Short description of the finding
+
+  finding_type:
+    type: string
+    enum: [discovery, todo, question, note, tech-debt, bug]
+    description: Type of finding
+
+  category:
+    type: string
+    enum:
+      - thread-safety
+      - resource-management
+      - error-handling
+      - state-management
+      - external-operations
+      - api-web-layer
+      - configuration
+      - code-consistency
+      - security
+      - performance
+      - architecture
+      - testing
+      - documentation
+      - other
+    description: Category (aligned with eval-framework)
+
+  severity:
+    type: string
+    enum: [critical, high, medium, low, info]
+    description: Severity level
+
+  # Content
+  description:
+    type: string
+    description: Detailed description
+
+  evidence:
+    type: object
+    properties:
+      file:
+        type: string
+        description: File path where the finding was discovered
+      line:
+        type: integer
+        minimum: 1
+        description: Line number
+      snippet:
+        type: string
+        description: Code snippet
+      function:
+        type: string
+        description: Function or method name
+
+  # Context
+  discovered_at:
+    type: string
+    format: date-time
+    description: When the finding was discovered
+
+  discovered_by:
+    type: string
+    description: Who/what discovered this (e.g., "claude", "human")
+
+  discovered_during:
+    type: string
+    description: Activity during which this was found (e.g., "architecture-review")
+
+  session_id:
+    type: string
+    pattern: "^sess-[0-9]+$"
+    description: Session ID that created this finding
+
+  branch:
+    type: string
+    description: Git branch name
+
+  commit:
+    type: string
+    description: Git commit hash
+
+  # Relationships
+  related_to:
+    type: array
+    items:
+      type: string
+      pattern: "^f-[a-f0-9]{8}$"
+    description: IDs of related findings
+
+  blocks:
+    type: array
+    items:
+      type: string
+      pattern: "^f-[a-f0-9]{8}$"
+    description: IDs of findings this blocks
+
+  blocked_by:
+    type: array
+    items:
+      type: string
+      pattern: "^f-[a-f0-9]{8}$"
+    description: IDs of findings blocking this
+
+  parent:
+    type: string
+    pattern: "^f-[a-f0-9]{8}$"
+    description: Parent finding ID (for sub-issues)
+
+  ado_work_item:
+    type: string
+    pattern: "^AB#[0-9]+$"
+    description: Linked ADO work item (e.g., "AB#1234")
+
+  eval_result:
+    type: string
+    description: Linked eval-framework result ID
+
+  # Status
+  status:
+    type: string
+    enum: [open, in_progress, resolved, wont_fix, promoted]
+    description: Current status
+
+  resolution:
+    type: string
+    description: How the finding was resolved
+
+  resolved_at:
+    type: string
+    format: date-time
+    description: When the finding was resolved
+
+  resolved_by:
+    type: string
+    description: Who resolved the finding
+
+  # Metadata
+  tags:
+    type: array
+    items:
+      type: string
+    description: Tags for categorization
+
+  priority:
+    type: integer
+    minimum: 1
+    maximum: 4
+    description: Priority 1-4 (aligned with ADO)
+
+  effort:
+    type: string
+    enum: [small, medium, large, unknown]
+    description: Estimated effort to address
+
+  confidence:
+    type: number
+    minimum: 0
+    maximum: 1
+    description: Confidence score (0-1)
+
+  # Timestamps
+  created_at:
+    type: string
+    format: date-time
+    description: When the finding was created
+
+  updated_at:
+    type: string
+    format: date-time
+    description: When the finding was last updated

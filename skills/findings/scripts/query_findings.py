@@ -289,11 +289,11 @@ Examples:
     )
     update_group.add_argument(
         "--promote", type=str, metavar="ID",
-        help="Mark finding as promoted to ADO (provide work item ID)"
+        help="Link finding to ADO work item (does NOT create the item - create it first)"
     )
     update_group.add_argument(
         "--promote-to", type=str, metavar="AB#1234",
-        help="ADO work item ID (use with --promote)"
+        help="ADO work item ID to link (use with --promote)"
     )
 
     # Other
@@ -301,6 +301,10 @@ Examples:
     other_group.add_argument(
         "--stats", action="store_true",
         help="Show statistics"
+    )
+    other_group.add_argument(
+        "--rebuild-index", action="store_true",
+        help="Rebuild the index from JSONL (use if index is corrupted)"
     )
     other_group.add_argument(
         "--compact", action="store_true",
@@ -461,6 +465,16 @@ Examples:
             print("  By Type:")
             for t, count in stats.get("by_type", {}).items():
                 print(f"    {t}: {count}")
+        sys.exit(0)
+
+    # Handle rebuild-index
+    if args.rebuild_index:
+        index = store._rebuild_index()
+        if args.json:
+            print(json.dumps({"rebuilt": True, "findings_count": len(index["findings"])}))
+        else:
+            print(color("Index rebuilt.", Colors.GREEN))
+            print(f"  Findings indexed: {len(index['findings'])}")
         sys.exit(0)
 
     # Handle compact
