@@ -296,6 +296,29 @@ Examples:
         help="ADO work item ID to link (use with --promote)"
     )
 
+    # Dependencies
+    dep_group = parser.add_argument_group("Dependencies")
+    dep_group.add_argument(
+        "--block", type=str, nargs=2, metavar=("BLOCKER", "BLOCKED"),
+        help="Mark BLOCKER as blocking BLOCKED (e.g., --block f-abc f-def)"
+    )
+    dep_group.add_argument(
+        "--unblock", type=str, nargs=2, metavar=("BLOCKER", "BLOCKED"),
+        help="Remove blocking relationship"
+    )
+    dep_group.add_argument(
+        "--relate", type=str, nargs=2, metavar=("ID1", "ID2"),
+        help="Mark two findings as related"
+    )
+    dep_group.add_argument(
+        "--unrelate", type=str, nargs=2, metavar=("ID1", "ID2"),
+        help="Remove related relationship"
+    )
+    dep_group.add_argument(
+        "--show-deps", type=str, metavar="ID",
+        help="Show dependencies for a finding"
+    )
+
     # Other
     other_group = parser.add_argument_group("Other")
     other_group.add_argument(
@@ -431,6 +454,178 @@ Examples:
         else:
             print(color(f"Finding {args.promote} not found.", Colors.RED))
         sys.exit(0 if success else 1)
+
+    # Handle block
+    if args.block:
+        blocker_id, blocked_id = args.block
+
+        blocker = store.get_finding(blocker_id)
+        blocked = store.get_finding(blocked_id)
+
+        if not blocker:
+            print(color(f"Error: Finding {blocker_id} not found", Colors.RED))
+            sys.exit(1)
+        if not blocked:
+            print(color(f"Error: Finding {blocked_id} not found", Colors.RED))
+            sys.exit(1)
+
+        # Update blocker's "blocks" list
+        blocks = blocker.blocks.copy()
+        if blocked_id not in blocks:
+            blocks.append(blocked_id)
+        store.update_finding(blocker_id, blocks=blocks)
+
+        # Update blocked's "blocked_by" list
+        blocked_by = blocked.blocked_by.copy()
+        if blocker_id not in blocked_by:
+            blocked_by.append(blocker_id)
+        store.update_finding(blocked_id, blocked_by=blocked_by)
+
+        if args.json:
+            print(json.dumps({"blocker": blocker_id, "blocked": blocked_id, "action": "block"}))
+        else:
+            print(color(f"{blocker_id} now blocks {blocked_id}", Colors.GREEN))
+        sys.exit(0)
+
+    # Handle unblock
+    if args.unblock:
+        blocker_id, blocked_id = args.unblock
+
+        blocker = store.get_finding(blocker_id)
+        blocked = store.get_finding(blocked_id)
+
+        if not blocker:
+            print(color(f"Error: Finding {blocker_id} not found", Colors.RED))
+            sys.exit(1)
+        if not blocked:
+            print(color(f"Error: Finding {blocked_id} not found", Colors.RED))
+            sys.exit(1)
+
+        # Remove from blocker's "blocks" list
+        blocks = [b for b in blocker.blocks if b != blocked_id]
+        store.update_finding(blocker_id, blocks=blocks)
+
+        # Remove from blocked's "blocked_by" list
+        blocked_by = [b for b in blocked.blocked_by if b != blocker_id]
+        store.update_finding(blocked_id, blocked_by=blocked_by)
+
+        if args.json:
+            print(json.dumps({"blocker": blocker_id, "blocked": blocked_id, "action": "unblock"}))
+        else:
+            print(color(f"{blocker_id} no longer blocks {blocked_id}", Colors.GREEN))
+        sys.exit(0)
+
+    # Handle relate
+    if args.relate:
+        id1, id2 = args.relate
+
+        f1 = store.get_finding(id1)
+        f2 = store.get_finding(id2)
+
+        if not f1:
+            print(color(f"Error: Finding {id1} not found", Colors.RED))
+            sys.exit(1)
+        if not f2:
+            print(color(f"Error: Finding {id2} not found", Colors.RED))
+            sys.exit(1)
+
+        # Add bidirectional relationship
+        related1 = f1.related_to.copy()
+        if id2 not in related1:
+            related1.append(id2)
+        store.update_finding(id1, related_to=related1)
+
+        related2 = f2.related_to.copy()
+        if id1 not in related2:
+            related2.append(id1)
+        store.update_finding(id2, related_to=related2)
+
+        if args.json:
+            print(json.dumps({"id1": id1, "id2": id2, "action": "relate"}))
+        else:
+            print(color(f"{id1} and {id2} are now related", Colors.GREEN))
+        sys.exit(0)
+
+    # Handle unrelate
+    if args.unrelate:
+        id1, id2 = args.unrelate
+
+        f1 = store.get_finding(id1)
+        f2 = store.get_finding(id2)
+
+        if not f1:
+            print(color(f"Error: Finding {id1} not found", Colors.RED))
+            sys.exit(1)
+        if not f2:
+            print(color(f"Error: Finding {id2} not found", Colors.RED))
+            sys.exit(1)
+
+        # Remove bidirectional relationship
+        related1 = [r for r in f1.related_to if r != id2]
+        store.update_finding(id1, related_to=related1)
+
+        related2 = [r for r in f2.related_to if r != id1]
+        store.update_finding(id2, related_to=related2)
+
+        if args.json:
+            print(json.dumps({"id1": id1, "id2": id2, "action": "unrelate"}))
+        else:
+            print(color(f"{id1} and {id2} are no longer related", Colors.GREEN))
+        sys.exit(0)
+
+    # Handle show-deps
+    if args.show_deps:
+        finding = store.get_finding(args.show_deps)
+        if not finding:
+            print(color(f"Error: Finding {args.show_deps} not found", Colors.RED))
+            sys.exit(1)
+
+        if args.json:
+            print(json.dumps({
+                "id": args.show_deps,
+                "blocks": finding.blocks,
+                "blocked_by": finding.blocked_by,
+                "related_to": finding.related_to,
+                "parent": finding.parent
+            }, indent=2))
+        else:
+            print(color(f"Dependencies for {args.show_deps}:", Colors.CYAN, Colors.BOLD))
+            print(f"  Title: {finding.title}")
+            print()
+
+            if finding.blocked_by:
+                print(color("  Blocked by:", Colors.RED))
+                for bid in finding.blocked_by:
+                    bf = store.get_finding(bid)
+                    title = bf.title[:40] if bf else "(not found)"
+                    print(f"    - {bid}: {title}")
+            else:
+                print(color("  Blocked by: (none)", Colors.DIM))
+
+            if finding.blocks:
+                print(color("  Blocks:", Colors.YELLOW))
+                for bid in finding.blocks:
+                    bf = store.get_finding(bid)
+                    title = bf.title[:40] if bf else "(not found)"
+                    print(f"    - {bid}: {title}")
+            else:
+                print(color("  Blocks: (none)", Colors.DIM))
+
+            if finding.related_to:
+                print(color("  Related to:", Colors.BLUE))
+                for rid in finding.related_to:
+                    rf = store.get_finding(rid)
+                    title = rf.title[:40] if rf else "(not found)"
+                    print(f"    - {rid}: {title}")
+            else:
+                print(color("  Related to: (none)", Colors.DIM))
+
+            if finding.parent:
+                pf = store.get_finding(finding.parent)
+                title = pf.title[:40] if pf else "(not found)"
+                print(color(f"  Parent: {finding.parent}: {title}", Colors.MAGENTA))
+
+        sys.exit(0)
 
     # Handle show
     if args.show:

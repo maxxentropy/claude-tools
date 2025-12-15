@@ -192,24 +192,68 @@ python3 skills/findings/scripts/query_findings.py --capture \
 Promote findings to official work items:
 
 ```bash
-# 1. First create the ADO work item
-az boards work-item create --org "$ORG" --project "$PROJECT" \
-  --type "Task" --title "Fix N+1 query in OrderService" \
-  --output json
+# Option 1: Auto-create ADO work item from finding (recommended)
+python3 skills/findings/scripts/promote_to_ado.py f-abc123
 
-# 2. Link finding to work item
+# Option 2: Promote as specific type
+python3 skills/findings/scripts/promote_to_ado.py f-abc123 --type Bug
+
+# Option 3: Dry run to see what would be created
+python3 skills/findings/scripts/promote_to_ado.py f-abc123 --dry-run
+
+# Option 4: Manual linking (if you created the item separately)
 python3 skills/findings/scripts/query_findings.py \
   --promote f-abc123 --promote-to AB#5678
 ```
 
 ### With eval-framework
 
-Link findings to evaluation results:
+Extract findings from evaluation results:
 
 ```bash
-python3 skills/findings/scripts/query_findings.py --capture \
-  --title "Finding from evaluation" \
-  --eval "arch-review-2025-12-15-eval-xyz"
+# Import all findings from an eval result
+python3 skills/findings/scripts/findings_from_eval.py \
+  --eval-file .eval-results/arch-review-2025-12-15.yaml
+
+# Import only high+ severity, skip already-fixed
+python3 skills/findings/scripts/findings_from_eval.py \
+  --eval-file .eval-results/arch-review-2025-12-15.yaml \
+  --min-severity high --skip-fixed
+
+# Link existing finding to eval result
+python3 skills/findings/scripts/link_eval_results.py \
+  --finding f-abc123 --eval arch-review-2025-12-15-eval-xyz
+
+# Show findings linked to an eval
+python3 skills/findings/scripts/link_eval_results.py \
+  --show-eval arch-review-2025-12-15-eval-xyz
+```
+
+### Dependency Management
+
+Track blocking relationships between findings:
+
+```bash
+# Mark one finding as blocking another
+python3 skills/findings/scripts/query_findings.py \
+  --block f-auth-fix f-user-registration
+
+# Remove blocking relationship
+python3 skills/findings/scripts/query_findings.py \
+  --unblock f-auth-fix f-user-registration
+
+# Mark findings as related
+python3 skills/findings/scripts/query_findings.py \
+  --relate f-abc123 f-def456
+
+# Show dependencies for a finding
+python3 skills/findings/scripts/query_findings.py --show-deps f-abc123
+
+# Show only ready (unblocked) findings
+python3 skills/findings/scripts/query_findings.py --ready
+
+# Show blocked findings
+python3 skills/findings/scripts/query_findings.py --blocked
 ```
 
 ## Finding Types
