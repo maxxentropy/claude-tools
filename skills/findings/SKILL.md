@@ -99,6 +99,10 @@ python3 skills/findings/scripts/session_context.py --save \
 | `--promote f-abc123 --promote-to AB#1234` | Link to ADO work item |
 | `--stats` | Show statistics |
 | `--compact` | Analyze JSONL for compaction |
+| `--archive-older-than DURATION` | Archive old closed findings (e.g., 30d, 90d) |
+| `--summarize-older-than DURATION` | Create summary of old findings |
+| `--use-sqlite` | Enable SQLite cache for faster queries |
+| `--rebuild-sqlite` | Rebuild SQLite cache from JSONL |
 
 ### Capture Options
 

@@ -338,6 +338,36 @@ Examples:
         help="Apply compaction (without this, only shows what would be compacted)"
     )
 
+    # Age-based operations
+    age_group = parser.add_argument_group("Age-based Operations")
+    age_group.add_argument(
+        "--archive-older-than", type=str, metavar="DURATION",
+        help="Archive findings older than DURATION (e.g., 30d, 2w, 90d)"
+    )
+    age_group.add_argument(
+        "--archive-apply", action="store_true",
+        help="Apply archival (without this, only shows what would be archived)"
+    )
+    age_group.add_argument(
+        "--summarize-older-than", type=str, metavar="DURATION",
+        help="Create summary note for findings older than DURATION"
+    )
+    age_group.add_argument(
+        "--summarize-apply", action="store_true",
+        help="Apply summary creation (without this, only shows what would be summarized)"
+    )
+
+    # SQLite cache
+    cache_group = parser.add_argument_group("Cache")
+    cache_group.add_argument(
+        "--use-sqlite", action="store_true",
+        help="Use SQLite cache for faster queries"
+    )
+    cache_group.add_argument(
+        "--rebuild-sqlite", action="store_true",
+        help="Rebuild SQLite cache from JSONL"
+    )
+
     # Output format
     format_group = parser.add_argument_group("Format")
     format_group.add_argument(
@@ -381,7 +411,7 @@ Examples:
     )
 
     args = parser.parse_args()
-    store = FindingsStore()
+    store = FindingsStore(use_sqlite_cache=args.use_sqlite)
 
     # Handle capture
     if args.capture:
@@ -686,6 +716,81 @@ Examples:
                 print(color("\n  (Dry run - use --compact-apply to apply)", Colors.DIM))
             else:
                 print(color("\n  Compaction applied.", Colors.GREEN))
+        sys.exit(0)
+
+    # Handle archive-older-than
+    if args.archive_older_than:
+        result = store.archive_old_findings(
+            older_than=args.archive_older_than,
+            dry_run=not args.archive_apply
+        )
+        if "error" in result:
+            print(color(f"Error: {result['error']}", Colors.RED))
+            sys.exit(1)
+
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(color("Archive Analysis", Colors.BOLD))
+            print(f"  Cutoff date: {result['cutoff_date'][:10]}")
+            print(f"  Status filter: {', '.join(result['status_filter'])}")
+            print(f"  Findings to archive: {result['findings_to_archive']}")
+
+            if result.get('archived_findings'):
+                print()
+                print(color("  Findings:", Colors.DIM))
+                for f in result['archived_findings'][:10]:
+                    print(f"    {f['id']} [{f['status']}] {f['title']}")
+                if len(result['archived_findings']) > 10:
+                    print(f"    ... and {len(result['archived_findings']) - 10} more")
+
+            if result['dry_run']:
+                print(color("\n  (Dry run - use --archive-apply to apply)", Colors.DIM))
+            else:
+                print(color(f"\n  Archived {result.get('archived_count', 0)} findings.", Colors.GREEN))
+        sys.exit(0)
+
+    # Handle summarize-older-than
+    if args.summarize_older_than:
+        result = store.summarize_old_findings(
+            older_than=args.summarize_older_than,
+            dry_run=not args.summarize_apply
+        )
+        if "error" in result:
+            print(color(f"Error: {result['error']}", Colors.RED))
+            sys.exit(1)
+
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(color("Summary Analysis", Colors.BOLD))
+            print(f"  Cutoff date: {result['cutoff_date'][:10]}")
+            print(f"  Findings to summarize: {result['findings_count']}")
+
+            if result.get('summary'):
+                summary = result['summary']
+                print()
+                print(color("  Summary:", Colors.DIM))
+                print(f"    Period: {summary['period']}")
+                print(f"    Total: {summary['total_findings']}")
+                if summary.get('top_categories'):
+                    print(f"    Top categories: {', '.join(f'{c}: {n}' for c, n in summary['top_categories'])}")
+
+            if result['dry_run']:
+                print(color("\n  (Dry run - use --summarize-apply to apply)", Colors.DIM))
+            else:
+                print(color(f"\n  Summary created: {result.get('summary_finding_id', 'N/A')}", Colors.GREEN))
+        sys.exit(0)
+
+    # Handle rebuild-sqlite
+    if args.rebuild_sqlite:
+        result = store.rebuild_sqlite_cache()
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(color("SQLite cache rebuilt.", Colors.GREEN))
+            print(f"  Findings indexed: {result['findings_count']}")
+            print(f"  Cache file: {result['sqlite_path']}")
         sys.exit(0)
 
     # Handle queries

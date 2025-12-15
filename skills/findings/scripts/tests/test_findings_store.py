@@ -2,11 +2,12 @@
 
 import json
 import tempfile
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import pytest
 
-from findings_store import FindingsStore, Finding, Evidence, FINDING_TYPES, SEVERITIES
+from findings_store import FindingsStore, Finding, Evidence, FINDING_TYPES, SEVERITIES, parse_duration
 
 
 @pytest.fixture
@@ -252,3 +253,153 @@ class TestFinding:
         assert finding.title == "Test finding"
         assert finding.evidence.file == "test.py"
         assert finding.evidence.line == 10
+
+
+class TestParseDuration:
+    """Tests for parse_duration function."""
+
+    def test_parse_days(self):
+        """Parses day durations."""
+        assert parse_duration("30d") == timedelta(days=30)
+        assert parse_duration("1d") == timedelta(days=1)
+        assert parse_duration("365d") == timedelta(days=365)
+
+    def test_parse_weeks(self):
+        """Parses week durations."""
+        assert parse_duration("2w") == timedelta(weeks=2)
+        assert parse_duration("1w") == timedelta(weeks=1)
+
+    def test_parse_hours(self):
+        """Parses hour durations."""
+        assert parse_duration("6h") == timedelta(hours=6)
+        assert parse_duration("24h") == timedelta(hours=24)
+
+    def test_parse_minutes(self):
+        """Parses minute durations."""
+        assert parse_duration("30m") == timedelta(minutes=30)
+        assert parse_duration("90m") == timedelta(minutes=90)
+
+    def test_case_insensitive(self):
+        """Handles uppercase units."""
+        assert parse_duration("30D") == timedelta(days=30)
+        assert parse_duration("2W") == timedelta(weeks=2)
+
+    def test_invalid_format_raises(self):
+        """Invalid format raises ValueError."""
+        with pytest.raises(ValueError):
+            parse_duration("invalid")
+        with pytest.raises(ValueError):
+            parse_duration("30x")
+        with pytest.raises(ValueError):
+            parse_duration("abc123")
+
+
+class TestArchiveOldFindings:
+    """Tests for archive_old_findings method."""
+
+    def test_archive_reports_findings_count(self, temp_store):
+        """Archive reports how many findings would be archived."""
+        # Create some findings that we'll manually backdate
+        id1 = temp_store.create_finding(title="Old resolved")
+        temp_store.resolve_finding(id1)
+
+        # Manually update the timestamp to be old (use proper format: YYYY-MM-DDTHH:MM:SSZ)
+        index = temp_store._load_index()
+        old_date = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        index["findings"][id1]["updated_at"] = old_date
+        temp_store._save_index(index)
+
+        result = temp_store.archive_old_findings("30d", dry_run=True)
+        assert result["dry_run"] is True
+        assert result["findings_to_archive"] == 1
+
+    def test_archive_respects_status_filter(self, temp_store):
+        """Archive only affects findings with specified statuses."""
+        # Create an open finding
+        id1 = temp_store.create_finding(title="Open finding")
+
+        # Backdate it (use proper format: YYYY-MM-DDTHH:MM:SSZ)
+        index = temp_store._load_index()
+        old_date = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        index["findings"][id1]["updated_at"] = old_date
+        temp_store._save_index(index)
+
+        # Default filter is resolved/wont_fix/promoted, so open should not be archived
+        result = temp_store.archive_old_findings("30d", dry_run=True)
+        assert result["findings_to_archive"] == 0
+
+    def test_archive_invalid_duration_returns_error(self, temp_store):
+        """Invalid duration returns error in result."""
+        result = temp_store.archive_old_findings("invalid", dry_run=True)
+        assert "error" in result
+
+
+class TestSummarizeOldFindings:
+    """Tests for summarize_old_findings method."""
+
+    def test_summarize_reports_findings_count(self, temp_store):
+        """Summarize reports how many findings would be summarized."""
+        # Create some findings and backdate them
+        id1 = temp_store.create_finding(title="Old finding 1", category="performance")
+        id2 = temp_store.create_finding(title="Old finding 2", category="security")
+
+        # Backdate both (use proper format: YYYY-MM-DDTHH:MM:SSZ)
+        index = temp_store._load_index()
+        old_date = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        index["findings"][id1]["created_at"] = old_date
+        index["findings"][id2]["created_at"] = old_date
+        temp_store._save_index(index)
+
+        result = temp_store.summarize_old_findings("30d", dry_run=True)
+        assert result["dry_run"] is True
+        assert result["findings_count"] == 2
+        assert "summary" in result
+        assert result["summary"]["total_findings"] == 2
+
+    def test_summarize_invalid_duration_returns_error(self, temp_store):
+        """Invalid duration returns error in result."""
+        result = temp_store.summarize_old_findings("invalid", dry_run=True)
+        assert "error" in result
+
+
+class TestSQLiteCache:
+    """Tests for SQLite cache functionality."""
+
+    def test_sqlite_cache_initialization(self):
+        """SQLite cache initializes and creates database."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            git_dir = Path(tmpdir) / ".git"
+            git_dir.mkdir()
+
+            store = FindingsStore(root_dir=Path(tmpdir), use_sqlite_cache=True)
+            assert store.sqlite_path.exists()
+
+    def test_sqlite_cache_queries(self):
+        """SQLite cache supports queries."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            git_dir = Path(tmpdir) / ".git"
+            git_dir.mkdir()
+
+            store = FindingsStore(root_dir=Path(tmpdir), use_sqlite_cache=True)
+            store.create_finding(title="Test 1", severity="high")
+            store.create_finding(title="Test 2", severity="low")
+
+            # Query using SQL
+            results = store.query_findings_sql(severity="high")
+            assert len(results) == 1
+            assert results[0].title == "Test 1"
+
+    def test_rebuild_sqlite_cache(self):
+        """Rebuild SQLite cache from JSONL."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            git_dir = Path(tmpdir) / ".git"
+            git_dir.mkdir()
+
+            # Create store without SQLite first
+            store = FindingsStore(root_dir=Path(tmpdir), use_sqlite_cache=False)
+            store.create_finding(title="Existing finding")
+
+            # Now enable and rebuild
+            result = store.rebuild_sqlite_cache()
+            assert result["rebuilt"] is True
+            assert result["findings_count"] == 1
