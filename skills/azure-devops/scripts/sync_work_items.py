@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -121,7 +121,7 @@ def convert_ado_item_to_work_item(ado_item: Dict) -> WorkItem:
         tags=tags,
         parent_id=ado_item.get("parent"),
         url=ado_item.get("url"),
-        last_fetched=datetime.utcnow(),
+        last_fetched=datetime.now(timezone.utc),
         changed_date=changed_date
     )
 
@@ -243,7 +243,7 @@ def show_status(index_manager: WorkItemIndexManager) -> None:
     print("=" * 50)
 
     if index.last_sync:
-        age = datetime.utcnow() - index.last_sync
+        age = datetime.now(timezone.utc) - index.last_sync
         print(f"Last sync: {index.last_sync.isoformat()}")
         print(f"Age: {age.total_seconds() / 3600:.1f} hours")
     else:

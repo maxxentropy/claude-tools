@@ -17,7 +17,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -785,7 +785,7 @@ class AreaAdvisor:
         )
 
         return AreaAdvisoryReport(
-            analysis_timestamp=datetime.utcnow(),
+            analysis_timestamp=datetime.now(timezone.utc),
             codebase_path=str(Path(self.codebase_path).resolve()),
             project_name=project_name,
             organization=self.config.get('organization', ''),

@@ -23,7 +23,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -1034,7 +1034,7 @@ Examples:
                     assigned_to=None,
                     area_path=area,
                     url=created.get("url"),
-                    last_fetched=datetime.utcnow()
+                    last_fetched=datetime.now(timezone.utc)
                 )
                 detector.index_manager.upsert_work_item(new_item)
                 detector.index_manager.link_branch(context.branch_name, created_id)

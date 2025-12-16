@@ -28,7 +28,7 @@ import argparse
 import json
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Union, List, Dict, Any
 
@@ -410,7 +410,7 @@ def update_index_from_results(
             tags=tags,
             parent_id=item.get("parent"),
             url=item.get("url"),
-            last_fetched=datetime.utcnow(),
+            last_fetched=datetime.now(timezone.utc),
             changed_date=changed_date
         )
         index_manager.upsert_work_item(work_item)
@@ -511,7 +511,7 @@ Examples:
             output = {
                 "source": "cache",
                 "query": args.search,
-                "queryTime": datetime.utcnow().isoformat() + "Z",
+                "queryTime": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "count": len(results),
                 "items": results
             }
@@ -542,7 +542,7 @@ Examples:
         else:
             output = {
                 "source": "cache",
-                "queryTime": datetime.utcnow().isoformat() + "Z",
+                "queryTime": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "count": len(results),
                 "missing": missing,
                 "items": results
@@ -639,7 +639,7 @@ Examples:
     else:
         output = {
             "source": "cache" if from_cache else "ado",
-            "queryTime": datetime.utcnow().isoformat() + "Z",
+            "queryTime": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "count": len(results),
             "items": results
         }

@@ -23,7 +23,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -902,7 +902,7 @@ class CodebaseAnalyzer:
             architecture_patterns=patterns,
             ownership_mappings=ownership_mappings,
             suggested_area_structure=suggested_structure,
-            analysis_timestamp=datetime.utcnow(),
+            analysis_timestamp=datetime.now(timezone.utc),
             statistics=statistics
         )
 

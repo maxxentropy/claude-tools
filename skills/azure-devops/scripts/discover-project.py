@@ -21,7 +21,7 @@ import argparse
 import json
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -369,7 +369,7 @@ create/update work items correctly without guessing field values.
     metadata = {
         "organization": org,
         "project": project,
-        "discovered_at": datetime.utcnow().isoformat() + "Z",
+        "discovered_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "schema_version": "2.0",  # New version with full field definitions
         "areas": discover_areas(org, project, args.verbose),
         "iterations": discover_iterations(org, project, args.verbose),
