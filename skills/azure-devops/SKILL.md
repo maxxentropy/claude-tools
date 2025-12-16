@@ -11,19 +11,40 @@ description: |
 
 Integrate with Azure DevOps for work items, pipelines, and repositories using Azure CLI and REST API.
 
+## ⚠️ MANDATORY: Authentication Gate
+
+**BEFORE any Azure DevOps operation, Claude MUST run this check:**
+
+```bash
+python3 ~/.claude/skills/azure-devops/scripts/check-prerequisites.py --auth-only
+```
+
+**If output is `NOT_AUTHENTICATED`:**
+1. **STOP** - Do not attempt any ADO commands
+2. **Tell the user**: "Azure DevOps authentication required. Please run `az login` in your terminal, then try again."
+3. **Do NOT** try workarounds, alternative auth methods, or retry
+4. **Do NOT** proceed with unauthenticated commands
+
+**If output is `OK`:** Proceed with the requested operation.
+
+This prevents wasted time on auth failures and provides clear guidance to users.
+
+---
+
 ## Quick Start
 
 ```bash
-# Check prerequisites
-python3 skills/azure-devops/scripts/check-prerequisites.py
+# 1. Check auth (MANDATORY - see above)
+python3 ~/.claude/skills/azure-devops/scripts/check-prerequisites.py --auth-only
 
-# If not configured, run configuration wizard (see below)
+# 2. Check full prerequisites (first time setup)
+python3 ~/.claude/skills/azure-devops/scripts/check-prerequisites.py
 
-# Query your active work items
-python3 skills/azure-devops/scripts/query-work-items.py --preset my-active
+# 3. Query your active work items
+python3 ~/.claude/skills/azure-devops/scripts/query-work-items.py --preset my-active
 
-# Query items you changed this week
-python3 skills/azure-devops/scripts/query-work-items.py --preset changed-this-week --format table
+# 4. Query items you changed this week
+python3 ~/.claude/skills/azure-devops/scripts/query-work-items.py --preset changed-this-week --format table
 ```
 
 ## Prerequisites Check
@@ -31,7 +52,7 @@ python3 skills/azure-devops/scripts/query-work-items.py --preset changed-this-we
 Before any ADO operation, verify prerequisites:
 
 ```bash
-python3 skills/azure-devops/scripts/check-prerequisites.py
+python3 ~/.claude/skills/azure-devops/scripts/check-prerequisites.py
 ```
 
 Or manually:

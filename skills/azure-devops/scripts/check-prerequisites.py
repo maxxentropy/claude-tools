@@ -241,7 +241,34 @@ Examples:
                         help="Path to config file to validate")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Show detailed output")
+    parser.add_argument("--auth-only", action="store_true",
+                        help="Quick auth check only - returns 0 if authenticated, 1 if not")
+    parser.add_argument("--json", action="store_true",
+                        help="Output results as JSON (for programmatic use)")
     args = parser.parse_args()
+
+    # Quick auth-only check mode
+    if args.auth_only:
+        success, stdout, stderr = run_command(["az", "account", "show"])
+        if args.json:
+            import json as json_module
+            result = {"authenticated": success}
+            if success:
+                try:
+                    account = json_module.loads(stdout)
+                    result["user"] = account.get("user", {}).get("name", "unknown")
+                except:
+                    pass
+            else:
+                result["error"] = "Not authenticated. Run: az login"
+            print(json_module.dumps(result))
+        else:
+            if success:
+                print("OK")
+            else:
+                print("NOT_AUTHENTICATED")
+                print("Run: az login")
+        return 0 if success else 1
 
     print()
     print(color("=" * 60, Colors.BOLD))
