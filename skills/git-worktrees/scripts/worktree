@@ -1,0 +1,1004 @@
+#!/bin/bash
+# worktree - Git worktree management
+#
+# Simplifies git worktree operations with smart defaults, safety checks,
+# and integration with Azure DevOps/GitHub workflows.
+#
+# Usage:
+#   worktree create <type> <id>      # Create worktree
+#   worktree list                    # List worktrees
+#   worktree remove <name>           # Remove worktree
+#   worktree cleanup                 # Clean up stale worktrees
+#   worktree status [name]           # Show worktree status
+#   worktree open <name>             # Open in IDE
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+print_error() {
+    echo -e "${RED}Error:${NC} $1" >&2
+}
+
+print_success() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
+print_info() {
+    echo -e "${BLUE}→${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}Warning:${NC} $1"
+}
+
+check_git_repo() {
+    if [[ -z "$REPO_ROOT" ]]; then
+        print_error "Not in a git repository"
+        exit 1
+    fi
+}
+
+check_clean_working_tree() {
+    if ! git diff --quiet HEAD 2>/dev/null; then
+        print_warning "You have uncommitted changes in the current worktree"
+    fi
+}
+
+slugify() {
+    echo "$1" | \
+        tr '[:upper:]' '[:lower:]' | \
+        sed 's/[^a-z0-9]/-/g' | \
+        sed 's/--*/-/g' | \
+        sed 's/^-//' | \
+        sed 's/-$//' | \
+        cut -c1-50
+}
+
+# =============================================================================
+# Integration with Feature Workflow
+# =============================================================================
+
+get_work_item_title() {
+    local work_item_id="$1"
+
+    # Try Azure DevOps CLI
+    if command -v az &>/dev/null; then
+        local title
+        title=$(az boards work-item show --id "$work_item_id" --query "fields.\"System.Title\"" --output tsv 2>/dev/null || echo "")
+        if [[ -n "$title" ]]; then
+            echo "$title"
+            return
+        fi
+    fi
+
+    echo ""
+}
+
+detect_platform() {
+    # Check for .ado/config.json first
+    if [[ -f "$REPO_ROOT/.ado/config.json" ]]; then
+        echo "azdo"
+        return
+    fi
+
+    # Check for remote URLs
+    local remotes
+    remotes=$(git remote -v 2>/dev/null)
+
+    if echo "$remotes" | grep -q "dev.azure.com\|visualstudio.com"; then
+        echo "azdo"
+    elif echo "$remotes" | grep -q "github.com"; then
+        echo "github"
+    else
+        echo "unknown"
+    fi
+}
+
+# =============================================================================
+# Dependency Management
+# =============================================================================
+
+install_dependencies() {
+    local path="$1"
+
+    print_info "Installing dependencies..."
+
+    python3 "$SCRIPT_DIR/dependency_handler.py" \
+        install --path "$path"
+
+    if [[ $? -eq 0 ]]; then
+        print_success "Dependencies installed"
+    else
+        print_warning "Some dependencies failed to install"
+    fi
+}
+
+# =============================================================================
+# IDE Integration
+# =============================================================================
+
+open_in_ide() {
+    local path="$1"
+    local ide="$2"
+
+    python3 "$SCRIPT_DIR/ide_launcher.py" \
+        launch --path "$path" --ide "$ide"
+}
+
+# =============================================================================
+# Command: create
+# =============================================================================
+
+cmd_create() {
+    local type="$1"
+    local identifier="$2"
+    shift 2 || {
+        print_error "Missing type and identifier"
+        echo "Usage: worktree create <type> <identifier> [options]"
+        echo "Types: feature, fix, task, pr, branch, main"
+        exit 1
+    }
+
+    # Parse options
+    local path=""
+    local base_branch="main"
+    local no_deps=false
+    local ide="auto"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --path)
+                path="$2"
+                shift 2
+                ;;
+            --base)
+                base_branch="$2"
+                shift 2
+                ;;
+            --no-deps)
+                no_deps=true
+                shift
+                ;;
+            --ide)
+                ide="$2"
+                shift 2
+                ;;
+            *)
+                print_error "Unknown option: $1"
+                exit 1
+                ;;
+        esac
+    done
+
+    check_git_repo
+
+    # Dispatch to type-specific handler
+    case "$type" in
+        feature|fix|task)
+            create_from_work_item "$type" "$identifier" "$path" "$base_branch" "$no_deps" "$ide"
+            ;;
+        pr)
+            create_from_pr "$identifier" "$path" "$no_deps" "$ide"
+            ;;
+        branch)
+            create_from_branch "$identifier" "$path" "$no_deps" "$ide"
+            ;;
+        main)
+            create_from_main "${identifier:-stable}" "$path" "$no_deps" "$ide"
+            ;;
+        *)
+            print_error "Unknown type: $type"
+            echo "Valid types: feature, fix, task, pr, branch, main"
+            exit 1
+            ;;
+    esac
+}
+
+create_from_work_item() {
+    local type="$1"
+    local work_item_id="$2"
+    local path="$3"
+    local base_branch="$4"
+    local no_deps="$5"
+    local ide="$6"
+
+    print_info "Fetching work item #$work_item_id..."
+    local description
+    description=$(get_work_item_title "$work_item_id")
+
+    if [[ -z "$description" ]]; then
+        print_warning "Could not fetch work item title"
+        description="AB#$work_item_id"
+    else
+        print_info "Found: $description"
+    fi
+
+    # Generate branch name
+    local slug
+    slug=$(slugify "$description")
+    local branch_name="$type/AB#$work_item_id-$slug"
+
+    # Generate worktree path if not provided
+    if [[ -z "$path" ]]; then
+        local repo_name
+        repo_name=$(basename "$REPO_ROOT")
+        path="../${repo_name}-${type}-AB#${work_item_id}-${slug}"
+    fi
+
+    # Validate path doesn't exist
+    if [[ -e "$path" ]]; then
+        print_error "Path already exists: $path"
+        echo "Use --path to specify a different location, or remove the existing directory"
+        exit 1
+    fi
+
+    # Check if branch exists
+    local branch_exists=false
+    if git show-ref --verify --quiet "refs/heads/$branch_name"; then
+        branch_exists=true
+        print_info "Branch '$branch_name' already exists, will use it"
+    fi
+
+    # Create worktree
+    print_info "Creating worktree..."
+
+    if $branch_exists; then
+        git worktree add "$path" "$branch_name"
+    else
+        # Ensure we're on latest base
+        git fetch origin "$base_branch" 2>/dev/null || true
+        git worktree add -b "$branch_name" "$path" "origin/$base_branch" 2>/dev/null || \
+            git worktree add -b "$branch_name" "$path" "$base_branch"
+    fi
+
+    local abs_path
+    abs_path=$(cd "$path" && pwd)
+
+    print_success "Created worktree: $(basename "$path")"
+    echo "  Path: $abs_path"
+    echo "  Branch: $branch_name"
+    echo "  Base: $base_branch"
+
+    # Update tracking metadata
+    python3 "$SCRIPT_DIR/worktree_manager.py" \
+        track-create \
+        --name "$(basename "$path")" \
+        --path "$abs_path" \
+        --branch "$branch_name" \
+        --work-item "AB#$work_item_id"
+
+    # Install dependencies unless --no-deps
+    if [[ "$no_deps" != "true" ]]; then
+        install_dependencies "$abs_path"
+    fi
+
+    # Open in IDE
+    if [[ "$ide" != "none" ]]; then
+        open_in_ide "$abs_path" "$ide"
+    fi
+
+    # Print next steps
+    echo ""
+    print_success "Worktree ready!"
+    echo ""
+    echo -e "${CYAN}Next steps:${NC}"
+    echo "  cd $path"
+    echo "  # Make your changes"
+    echo "  git commit -am 'Your message'  # AB#$work_item_id auto-appended"
+    echo "  feature pr  # Create pull request"
+    echo ""
+    echo "To return to main worktree:"
+    echo "  cd -"
+}
+
+create_from_pr() {
+    local pr_id="$1"
+    local path="$2"
+    local no_deps="$3"
+    local ide="$4"
+
+    # Detect platform and fetch PR branch
+    local platform
+    platform=$(detect_platform)
+    local pr_branch=""
+
+    case "$platform" in
+        github)
+            print_info "Fetching PR #$pr_id from GitHub..."
+            pr_branch=$(gh pr view "$pr_id" --json headRefName --jq '.headRefName' 2>/dev/null)
+            if [[ -z "$pr_branch" ]]; then
+                print_error "Could not fetch PR #$pr_id from GitHub"
+                exit 1
+            fi
+
+            # Fetch PR branch
+            git fetch origin "$pr_branch"
+            ;;
+
+        azdo|azure-devops)
+            print_info "Fetching PR #$pr_id from Azure DevOps..."
+            pr_branch=$(az repos pr show --id "$pr_id" --query sourceRefName --output tsv 2>/dev/null | sed 's|refs/heads/||')
+            if [[ -z "$pr_branch" ]]; then
+                print_error "Could not fetch PR #$pr_id from Azure DevOps"
+                exit 1
+            fi
+
+            # Fetch branch
+            git fetch origin "$pr_branch"
+            ;;
+
+        *)
+            print_error "Could not detect platform (GitHub or Azure DevOps)"
+            exit 1
+            ;;
+    esac
+
+    print_info "PR branch: $pr_branch"
+
+    # Generate path
+    if [[ -z "$path" ]]; then
+        local repo_name
+        repo_name=$(basename "$REPO_ROOT")
+        path="../${repo_name}-review-pr-${pr_id}"
+    fi
+
+    # Validate path doesn't exist
+    if [[ -e "$path" ]]; then
+        print_error "Path already exists: $path"
+        exit 1
+    fi
+
+    # Create worktree
+    print_info "Creating review worktree..."
+    git worktree add "$path" "origin/$pr_branch"
+
+    local abs_path
+    abs_path=$(cd "$path" && pwd)
+
+    print_success "Created review worktree: $(basename "$path")"
+    echo "  Path: $abs_path"
+    echo "  Branch: $pr_branch"
+
+    # Track metadata
+    python3 "$SCRIPT_DIR/worktree_manager.py" \
+        track-create \
+        --name "$(basename "$path")" \
+        --path "$abs_path" \
+        --branch "$pr_branch" \
+        --pr "$pr_id"
+
+    # Install dependencies
+    if [[ "$no_deps" != "true" ]]; then
+        install_dependencies "$abs_path"
+    fi
+
+    # Open in IDE
+    if [[ "$ide" != "none" ]]; then
+        open_in_ide "$abs_path" "$ide"
+    fi
+
+    echo ""
+    print_success "PR review worktree ready!"
+    echo ""
+    echo -e "${CYAN}Next steps:${NC}"
+    echo "  cd $path"
+    echo "  # Review code, run tests"
+    if [[ "$platform" == "github" ]]; then
+        echo "  gh pr review $pr_id  # Leave feedback"
+    else
+        echo "  # Leave feedback in Azure DevOps"
+    fi
+    echo ""
+    echo "When done:"
+    echo "  worktree remove review-pr-$pr_id"
+}
+
+create_from_branch() {
+    local branch_name="$1"
+    local path="$2"
+    local no_deps="$3"
+    local ide="$4"
+
+    # Generate path
+    if [[ -z "$path" ]]; then
+        local repo_name
+        repo_name=$(basename "$REPO_ROOT")
+        local slug
+        slug=$(slugify "$branch_name")
+        path="../${repo_name}-${slug}"
+    fi
+
+    # Validate path doesn't exist
+    if [[ -e "$path" ]]; then
+        print_error "Path already exists: $path"
+        exit 1
+    fi
+
+    # Check if branch exists locally or remotely
+    local branch_exists=false
+    if git show-ref --verify --quiet "refs/heads/$branch_name"; then
+        branch_exists=true
+    elif git show-ref --verify --quiet "refs/remotes/origin/$branch_name"; then
+        print_info "Fetching branch from origin..."
+        git fetch origin "$branch_name"
+        branch_exists=true
+    fi
+
+    # Create worktree
+    print_info "Creating worktree..."
+
+    if $branch_exists; then
+        git worktree add "$path" "$branch_name" 2>/dev/null || \
+            git worktree add "$path" "origin/$branch_name"
+    else
+        # Create new branch
+        git worktree add -b "$branch_name" "$path" HEAD
+    fi
+
+    local abs_path
+    abs_path=$(cd "$path" && pwd)
+
+    print_success "Created worktree: $(basename "$path")"
+    echo "  Path: $abs_path"
+    echo "  Branch: $branch_name"
+
+    # Track metadata
+    python3 "$SCRIPT_DIR/worktree_manager.py" \
+        track-create \
+        --name "$(basename "$path")" \
+        --path "$abs_path" \
+        --branch "$branch_name"
+
+    # Install dependencies
+    if [[ "$no_deps" != "true" ]]; then
+        install_dependencies "$abs_path"
+    fi
+
+    # Open in IDE
+    if [[ "$ide" != "none" ]]; then
+        open_in_ide "$abs_path" "$ide"
+    fi
+
+    echo ""
+    print_success "Worktree ready!"
+    echo "  cd $path"
+}
+
+create_from_main() {
+    local name="$1"
+    local path="$2"
+    local no_deps="$3"
+    local ide="$4"
+
+    # Generate path
+    if [[ -z "$path" ]]; then
+        local repo_name
+        repo_name=$(basename "$REPO_ROOT")
+        path="../${repo_name}-${name}"
+    fi
+
+    # Validate path doesn't exist
+    if [[ -e "$path" ]]; then
+        print_error "Path already exists: $path"
+        exit 1
+    fi
+
+    # Ensure main is up to date
+    print_info "Fetching latest main..."
+    git fetch origin main 2>/dev/null || git fetch origin master 2>/dev/null || true
+
+    # Create worktree from main
+    print_info "Creating worktree from main..."
+    git worktree add "$path" main 2>/dev/null || \
+        git worktree add "$path" master 2>/dev/null || \
+        git worktree add "$path" origin/main
+
+    local abs_path
+    abs_path=$(cd "$path" && pwd)
+
+    print_success "Created worktree: $(basename "$path")"
+    echo "  Path: $abs_path"
+    echo "  Branch: main"
+
+    # Track metadata
+    python3 "$SCRIPT_DIR/worktree_manager.py" \
+        track-create \
+        --name "$(basename "$path")" \
+        --path "$abs_path" \
+        --branch "main"
+
+    # Install dependencies
+    if [[ "$no_deps" != "true" ]]; then
+        install_dependencies "$abs_path"
+    fi
+
+    # Open in IDE
+    if [[ "$ide" != "none" ]]; then
+        open_in_ide "$abs_path" "$ide"
+    fi
+
+    echo ""
+    print_success "Worktree ready!"
+    echo "  cd $path"
+}
+
+# =============================================================================
+# Command: list
+# =============================================================================
+
+cmd_list() {
+    local verbose=false
+    local json=false
+    local stale=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --verbose|-v)
+                verbose=true
+                shift
+                ;;
+            --json)
+                json=true
+                shift
+                ;;
+            --stale)
+                stale=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    check_git_repo
+
+    if $json; then
+        python3 "$SCRIPT_DIR/worktree_manager.py" list --json
+        return
+    fi
+
+    if $stale; then
+        python3 "$SCRIPT_DIR/worktree_manager.py" list --stale
+        return
+    fi
+
+    # Parse git worktree list output
+    local current_worktree
+    current_worktree=$(git rev-parse --show-toplevel)
+
+    echo -e "${CYAN}Current worktrees:${NC}"
+    echo ""
+
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^(/[^[:space:]]+)[[:space:]]+([a-f0-9]+)[[:space:]]+\[([^\]]+)\] ]]; then
+            local wt_path="${BASH_REMATCH[1]}"
+            local wt_commit="${BASH_REMATCH[2]}"
+            local wt_branch="${BASH_REMATCH[3]}"
+            local wt_name
+            wt_name=$(basename "$wt_path")
+
+            # Get status
+            local status_text="clean"
+            if [[ -d "$wt_path" ]]; then
+                local status_count
+                status_count=$(cd "$wt_path" && git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+                if [[ "$status_count" -gt 0 ]]; then
+                    status_text="$status_count uncommitted"
+                fi
+            fi
+
+            # Mark current worktree
+            local marker="  "
+            if [[ "$wt_path" == "$current_worktree" ]]; then
+                marker="* "
+            fi
+
+            echo -e "${marker}${GREEN}$wt_name${NC}  [$wt_branch] ($status_text)"
+            echo "    $wt_path"
+
+            if $verbose; then
+                python3 "$SCRIPT_DIR/worktree_manager.py" \
+                    status --name "$wt_name" --compact 2>/dev/null || true
+            fi
+
+            echo ""
+        fi
+    done < <(git worktree list)
+}
+
+# =============================================================================
+# Command: remove
+# =============================================================================
+
+cmd_remove() {
+    local name="$1"
+    local force=false
+    local keep_branch=false
+
+    shift || true
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f)
+                force=true
+                shift
+                ;;
+            --keep-branch)
+                keep_branch=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$name" ]]; then
+        print_error "Worktree name required"
+        echo "Usage: worktree remove <name> [--force] [--keep-branch]"
+        exit 1
+    fi
+
+    check_git_repo
+
+    # Get worktree path
+    local wt_path
+    wt_path=$(python3 "$SCRIPT_DIR/worktree_manager.py" get-path --name "$name" 2>/dev/null)
+
+    if [[ -z "$wt_path" ]] || [[ ! -d "$wt_path" ]]; then
+        # Try finding by partial name in git worktree list
+        wt_path=$(git worktree list | grep "$name" | head -1 | awk '{print $1}')
+    fi
+
+    if [[ -z "$wt_path" ]] || [[ ! -d "$wt_path" ]]; then
+        print_error "Worktree not found: $name"
+        echo "Use 'worktree list' to see available worktrees"
+        exit 1
+    fi
+
+    # Get branch name
+    local branch
+    branch=$(cd "$wt_path" && git rev-parse --abbrev-ref HEAD 2>/dev/null)
+
+    # Safety checks (unless --force)
+    if [[ "$force" != "true" ]]; then
+        # Check for uncommitted changes
+        local uncommitted
+        uncommitted=$(cd "$wt_path" && git status --porcelain 2>/dev/null)
+        if [[ -n "$uncommitted" ]]; then
+            print_warning "Worktree has uncommitted changes:"
+            echo ""
+            (cd "$wt_path" && git status --short)
+            echo ""
+            read -p "Force delete? [y/N]: " confirm
+            if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+                print_info "Cancelled"
+                exit 0
+            fi
+            force=true
+        fi
+
+        # Check for unpushed commits
+        local unpushed
+        unpushed=$(cd "$wt_path" && git log @{u}.. --oneline 2>/dev/null || echo "")
+        if [[ -n "$unpushed" ]]; then
+            print_warning "Branch has unpushed commits:"
+            echo ""
+            echo "$unpushed"
+            echo ""
+            read -p "Continue anyway? [y/N]: " confirm
+            if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+                print_info "Cancelled"
+                exit 0
+            fi
+        fi
+    fi
+
+    # Remove worktree
+    print_info "Removing worktree..."
+
+    if [[ "$force" == "true" ]]; then
+        git worktree remove --force "$wt_path"
+    else
+        git worktree remove "$wt_path"
+    fi
+
+    print_success "Removed worktree: $name"
+
+    # Delete branch (unless --keep-branch and unless it's main)
+    if [[ "$keep_branch" != "true" ]] && [[ "$branch" != "main" ]] && [[ "$branch" != "master" ]]; then
+        read -p "Delete branch '$branch'? [y/N]: " delete_branch
+        if [[ "$delete_branch" =~ ^[Yy]$ ]]; then
+            if git branch -d "$branch" 2>/dev/null; then
+                print_success "Deleted branch: $branch"
+            else
+                print_warning "Branch not fully merged"
+                read -p "Force delete? [y/N]: " force_delete
+                if [[ "$force_delete" =~ ^[Yy]$ ]]; then
+                    git branch -D "$branch"
+                    print_success "Deleted branch: $branch"
+                fi
+            fi
+        fi
+    fi
+
+    # Update tracking metadata
+    python3 "$SCRIPT_DIR/worktree_manager.py" track-remove --name "$name" 2>/dev/null || true
+
+    print_success "Cleanup complete"
+}
+
+# =============================================================================
+# Command: cleanup
+# =============================================================================
+
+cmd_cleanup() {
+    local dry_run=false
+    local merged=false
+    local stale_days=0
+    local all=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run)
+                dry_run=true
+                shift
+                ;;
+            --merged)
+                merged=true
+                shift
+                ;;
+            --stale)
+                stale_days="$2"
+                shift 2
+                ;;
+            --all)
+                all=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    check_git_repo
+
+    # Use Python helper to identify cleanup candidates
+    local candidates
+    candidates=$(python3 "$SCRIPT_DIR/worktree_manager.py" \
+        cleanup-candidates \
+        --merged="$merged" \
+        --stale-days="$stale_days" \
+        --all="$all")
+
+    if [[ -z "$candidates" ]]; then
+        print_info "No worktrees to clean up"
+        exit 0
+    fi
+
+    echo -e "${CYAN}Cleanup candidates:${NC}"
+    echo ""
+    echo "$candidates"
+    echo ""
+
+    if $dry_run; then
+        print_info "Dry run - no worktrees removed"
+        exit 0
+    fi
+
+    read -p "Proceed with cleanup? [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        print_info "Cancelled"
+        exit 0
+    fi
+
+    # Remove each candidate
+    echo "$candidates" | while IFS= read -r name; do
+        if [[ -n "$name" ]]; then
+            print_info "Removing: $name"
+            cmd_remove "$name" --force --keep-branch
+        fi
+    done
+
+    print_success "Cleanup complete"
+}
+
+# =============================================================================
+# Command: status
+# =============================================================================
+
+cmd_status() {
+    local name="$1"
+
+    check_git_repo
+
+    if [[ -z "$name" ]]; then
+        # Show current worktree status
+        name=$(basename "$(git rev-parse --show-toplevel)")
+    fi
+
+    python3 "$SCRIPT_DIR/worktree_manager.py" status --name "$name"
+}
+
+# =============================================================================
+# Command: open
+# =============================================================================
+
+cmd_open() {
+    local name="$1"
+    local ide="auto"
+
+    shift || true
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --ide)
+                ide="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$name" ]]; then
+        print_error "Worktree name required"
+        echo "Usage: worktree open <name> [--ide <ide>]"
+        exit 1
+    fi
+
+    check_git_repo
+
+    # Get worktree path
+    local wt_path
+    wt_path=$(python3 "$SCRIPT_DIR/worktree_manager.py" get-path --name "$name" 2>/dev/null)
+
+    if [[ -z "$wt_path" ]] || [[ ! -d "$wt_path" ]]; then
+        # Try finding by partial name
+        wt_path=$(git worktree list | grep "$name" | head -1 | awk '{print $1}')
+    fi
+
+    if [[ -z "$wt_path" ]] || [[ ! -d "$wt_path" ]]; then
+        print_error "Worktree not found: $name"
+        exit 1
+    fi
+
+    open_in_ide "$wt_path" "$ide"
+}
+
+# =============================================================================
+# Command: config
+# =============================================================================
+
+cmd_config() {
+    local key="$1"
+    local value="$2"
+
+    check_git_repo
+
+    if [[ -z "$key" ]]; then
+        python3 "$SCRIPT_DIR/worktree_manager.py" config
+    elif [[ -z "$value" ]]; then
+        python3 "$SCRIPT_DIR/worktree_manager.py" config "$key"
+    else
+        python3 "$SCRIPT_DIR/worktree_manager.py" config "$key" "$value"
+    fi
+}
+
+# =============================================================================
+# Usage
+# =============================================================================
+
+usage() {
+    echo "worktree - Git worktree management"
+    echo ""
+    echo -e "${CYAN}Usage:${NC}"
+    echo "  worktree create <type> <id> [options]   Create worktree"
+    echo "  worktree list [--verbose] [--stale]     List worktrees"
+    echo "  worktree remove <name> [--force]        Remove worktree"
+    echo "  worktree cleanup [--merged] [--stale N] Clean up worktrees"
+    echo "  worktree status [name]                  Show worktree status"
+    echo "  worktree open <name> [--ide <ide>]      Open in IDE"
+    echo "  worktree config [key] [value]           Get/set configuration"
+    echo ""
+    echo -e "${CYAN}Create Types:${NC}"
+    echo "  feature <work-item-id>   Create from work item (Azure DevOps)"
+    echo "  fix <work-item-id>       Create fix branch from work item"
+    echo "  task <work-item-id>      Create task branch from work item"
+    echo "  pr <pr-id>               Create from PR (GitHub or Azure DevOps)"
+    echo "  branch <branch-name>     Create from arbitrary branch"
+    echo "  main [name]              Create extra copy from main"
+    echo ""
+    echo -e "${CYAN}Create Options:${NC}"
+    echo "  --path <path>            Custom worktree path"
+    echo "  --base <branch>          Base branch (default: main)"
+    echo "  --no-deps                Skip dependency installation"
+    echo "  --ide <ide>              IDE to open (code, rider, idea, pycharm, auto, none)"
+    echo ""
+    echo -e "${CYAN}Examples:${NC}"
+    echo "  worktree create feature 1234            # From work item"
+    echo "  worktree create pr 5678                 # For PR review"
+    echo "  worktree create branch experiment       # From branch"
+    echo "  worktree create feature 1234 --ide rider  # Open in Rider"
+    echo "  worktree list --verbose                 # Detailed list"
+    echo "  worktree cleanup --merged               # Remove merged"
+    echo "  worktree open my-feature --ide code     # Open in VS Code"
+    echo ""
+    echo -e "${CYAN}Supported IDEs:${NC}"
+    echo "  code      Visual Studio Code"
+    echo "  rider     JetBrains Rider (.NET)"
+    echo "  idea      IntelliJ IDEA (Java/Kotlin)"
+    echo "  pycharm   PyCharm (Python)"
+    echo "  webstorm  WebStorm (Node.js)"
+    echo "  goland    GoLand (Go)"
+    echo "  auto      Auto-detect based on project"
+    echo "  none      Don't open IDE"
+    echo ""
+    echo -e "${CYAN}Integration:${NC}"
+    echo "  Works with: feature workflow, Azure DevOps, GitHub"
+    echo "  Pre-commit hooks: Automatic work item linking"
+}
+
+# =============================================================================
+# Main Dispatch
+# =============================================================================
+
+case "${1:-}" in
+    create)
+        shift
+        cmd_create "$@"
+        ;;
+    list|ls)
+        shift
+        cmd_list "$@"
+        ;;
+    remove|rm)
+        shift
+        cmd_remove "$@"
+        ;;
+    cleanup|clean)
+        shift
+        cmd_cleanup "$@"
+        ;;
+    status)
+        shift
+        cmd_status "$@"
+        ;;
+    open)
+        shift
+        cmd_open "$@"
+        ;;
+    config)
+        shift
+        cmd_config "$@"
+        ;;
+    help|--help|-h)
+        usage
+        ;;
+    "")
+        usage
+        ;;
+    *)
+        print_error "Unknown command: $1"
+        echo ""
+        usage
+        exit 1
+        ;;
+esac

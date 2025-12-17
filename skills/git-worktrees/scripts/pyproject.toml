@@ -1,0 +1,15 @@
+[project]
+name = "git-worktrees-scripts"
+version = "1.0.0"
+description = "Git Worktrees Skill - Parallel branch development management"
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-mock>=3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
