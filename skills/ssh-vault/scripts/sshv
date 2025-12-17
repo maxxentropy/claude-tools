@@ -1,0 +1,732 @@
+#!/usr/bin/env python3
+"""
+SSH Vault - SSH Key Lifecycle Management CLI.
+
+Usage:
+    sshv key create <key-id> [options]
+    sshv key list [--format=<fmt>]
+    sshv key show <key-id>
+    sshv key delete <key-id> [--force] [--delete-files]
+    sshv key rotate <key-id> [--new-id=<id>]
+    sshv key import <key-id> <path> [options]
+    sshv host add <host-id> --hostname=<host> [options]
+    sshv host list [--format=<fmt>]
+    sshv host show <host-id>
+    sshv host remove <host-id> [--force]
+    sshv deploy <key-id> <host-id> [--no-verify]
+    sshv verify [<key-id>] [<host-id>] [--all]
+    sshv revoke <key-id> <host-id>
+    sshv revoke <key-id> --all
+    sshv config sync [--dry-run]
+    sshv config show
+    sshv config clean [--dry-run]
+    sshv audit [<key-id>] [--fix] [--json]
+    sshv --help
+    sshv --version
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# Add scripts directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent))
+
+from inventory import get_manager
+from key_ops import (
+    create_key, list_keys, get_key, delete_key, rotate_key,
+    import_existing_key, KeyOperationError,
+)
+from host_ops import (
+    add_host, list_hosts, get_host, remove_host,
+    deploy_key, verify_deployment, verify_all_deployments,
+    revoke_key, revoke_key_from_all_hosts, test_host_connection,
+    HostOperationError,
+)
+from config_sync import (
+    sync_config, show_managed_entries, clean_managed_section,
+    get_config_status, ConfigSyncError,
+)
+from audit import run_audit, fix_permissions, get_audit_summary
+from models import list_builtin_services, BUILTIN_SERVICES
+
+
+VERSION = "0.1.0"
+
+
+def cmd_key_create(args):
+    """Create a new SSH key."""
+    manager = get_manager()
+    try:
+        key = create_key(
+            manager=manager,
+            key_id=args.key_id,
+            purpose=args.purpose or "",
+            expires=args.expires,
+            algorithm=args.algorithm,
+            no_passphrase=args.no_passphrase,
+            for_service=args.for_service,
+        )
+        print(f"Created key: {key.id}")
+        print(f"  Algorithm: {key.algorithm}")
+        print(f"  Fingerprint: {key.fingerprint}")
+        print(f"  Expires: {key.expires_at}")
+        print(f"  Private key: {key.private_key_path}")
+        print(f"  Public key: {key.public_key_path}")
+        if args.for_service:
+            print(f"  For service: {args.for_service}")
+    except KeyOperationError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_key_list(args):
+    """List all keys."""
+    manager = get_manager()
+    keys = list_keys(manager)
+
+    if not keys:
+        print("No keys found.")
+        return 0
+
+    if args.format == "json":
+        output = [
+            {
+                "id": k.id,
+                "algorithm": k.algorithm,
+                "fingerprint": k.fingerprint,
+                "purpose": k.purpose,
+                "expires_at": k.expires_at,
+                "deployments": len(k.deployments),
+            }
+            for k in keys
+        ]
+        print(json.dumps(output, indent=2))
+    else:
+        # Table format
+        print(f"{'ID':<20} {'ALGORITHM':<10} {'PURPOSE':<25} {'EXPIRES':<12} {'DEPLOYED'}")
+        print("-" * 80)
+        for key in keys:
+            expires = key.expires_at[:10] if key.expires_at else "never"
+            expired_mark = " (EXPIRED)" if key.is_expired() else ""
+            purpose = (key.purpose[:22] + "...") if len(key.purpose) > 25 else key.purpose
+            print(f"{key.id:<20} {key.algorithm:<10} {purpose:<25} {expires}{expired_mark:<12} {len(key.deployments)}")
+
+    return 0
+
+
+def cmd_key_show(args):
+    """Show key details."""
+    manager = get_manager()
+    key = get_key(manager, args.key_id)
+
+    if not key:
+        print(f"Key '{args.key_id}' not found.", file=sys.stderr)
+        return 1
+
+    print(f"Key: {key.id}")
+    print(f"  Algorithm: {key.algorithm}")
+    print(f"  Created: {key.created_at}")
+    print(f"  Expires: {key.expires_at or 'never'}")
+    if key.is_expired():
+        print("  Status: EXPIRED")
+    else:
+        days = key.days_until_expiry()
+        if days:
+            print(f"  Status: {days} days until expiry")
+    print(f"  Purpose: {key.purpose or '(none)'}")
+    print(f"  Fingerprint: {key.fingerprint}")
+    print(f"  Has passphrase: {'yes' if key.has_passphrase else 'no'}")
+    print(f"  Private key: {key.private_key_path}")
+    print(f"  Public key: {key.public_key_path}")
+
+    if key.deployments:
+        print(f"\n  Deployments ({len(key.deployments)}):")
+        for d in key.deployments:
+            verified = f", verified {d.verified_at}" if d.verified_at else ", not verified"
+            print(f"    - {d.host_id} (deployed {d.deployed_at}{verified})")
+
+    return 0
+
+
+def cmd_key_delete(args):
+    """Delete a key."""
+    manager = get_manager()
+    try:
+        delete_key(
+            manager=manager,
+            key_id=args.key_id,
+            force=args.force,
+            delete_files=args.delete_files,
+        )
+        print(f"Deleted key: {args.key_id}")
+        if args.delete_files:
+            print("  Key files also removed from ~/.ssh")
+    except KeyOperationError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_key_rotate(args):
+    """Rotate a key."""
+    manager = get_manager()
+    try:
+        new_key = rotate_key(
+            manager=manager,
+            old_key_id=args.key_id,
+            new_key_id=args.new_id,
+        )
+        print(f"Created new key: {new_key.id}")
+        print(f"  Fingerprint: {new_key.fingerprint}")
+        print(f"\nNext steps:")
+        print(f"  1. Deploy new key: sshv deploy {new_key.id} <host-id>")
+        print(f"  2. Verify new key: sshv verify {new_key.id}")
+        print(f"  3. Revoke old key: sshv revoke {args.key_id} --all")
+        print(f"  4. Delete old key: sshv key delete {args.key_id}")
+    except KeyOperationError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_key_import(args):
+    """Import an existing key."""
+    manager = get_manager()
+    try:
+        key = import_existing_key(
+            manager=manager,
+            key_id=args.key_id,
+            private_key_path=args.path,
+            purpose=args.purpose or "",
+            expires=args.expires,
+        )
+        print(f"Imported key: {key.id}")
+        print(f"  Algorithm: {key.algorithm}")
+        print(f"  Fingerprint: {key.fingerprint}")
+    except KeyOperationError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_host_add(args):
+    """Add a host."""
+    manager = get_manager()
+    try:
+        host = add_host(
+            manager=manager,
+            host_id=args.host_id,
+            hostname=args.hostname,
+            user=args.user,
+            port=args.port,
+        )
+        print(f"Added host: {host.id}")
+        print(f"  Hostname: {host.hostname}")
+        print(f"  User: {host.user}")
+        print(f"  Port: {host.port}")
+    except HostOperationError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_host_list(args):
+    """List all hosts."""
+    manager = get_manager()
+    hosts = list_hosts(manager)
+
+    if not hosts:
+        print("No hosts found.")
+        return 0
+
+    if args.format == "json":
+        output = [
+            {
+                "id": h.id,
+                "hostname": h.hostname,
+                "user": h.user,
+                "port": h.port,
+                "keys": h.keys,
+            }
+            for h in hosts
+        ]
+        print(json.dumps(output, indent=2))
+    else:
+        print(f"{'ID':<20} {'HOSTNAME':<25} {'USER':<15} {'PORT':<6} {'KEYS'}")
+        print("-" * 80)
+        for host in hosts:
+            keys = ", ".join(host.keys) if host.keys else "(none)"
+            print(f"{host.id:<20} {host.hostname:<25} {host.user:<15} {host.port:<6} {keys}")
+
+    return 0
+
+
+def cmd_host_show(args):
+    """Show host details."""
+    manager = get_manager()
+    host = get_host(manager, args.host_id)
+
+    if not host:
+        print(f"Host '{args.host_id}' not found.", file=sys.stderr)
+        return 1
+
+    print(f"Host: {host.id}")
+    print(f"  Hostname: {host.hostname}")
+    print(f"  User: {host.user}")
+    print(f"  Port: {host.port}")
+    print(f"  SSH: {host.ssh_destination()}")
+
+    if host.keys:
+        print(f"\n  Deployed keys ({len(host.keys)}):")
+        for key_id in host.keys:
+            print(f"    - {key_id}")
+
+    # Test connection
+    print("\n  Testing connection...")
+    success, message = test_host_connection(manager, args.host_id)
+    if success:
+        print(f"  Connection: OK")
+    else:
+        print(f"  Connection: FAILED - {message}")
+
+    return 0
+
+
+def cmd_host_remove(args):
+    """Remove a host."""
+    manager = get_manager()
+    try:
+        remove_host(
+            manager=manager,
+            host_id=args.host_id,
+            force=args.force,
+        )
+        print(f"Removed host: {args.host_id}")
+    except HostOperationError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_deploy(args):
+    """Deploy a key to a host."""
+    manager = get_manager()
+    try:
+        deploy_key(
+            manager=manager,
+            key_id=args.key_id,
+            host_id=args.host_id,
+            verify=not args.no_verify,
+        )
+        print(f"Deployed key '{args.key_id}' to host '{args.host_id}'")
+        if not args.no_verify:
+            print("  Verification: OK")
+    except HostOperationError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_verify(args):
+    """Verify key deployments."""
+    manager = get_manager()
+
+    if args.all or (not args.key_id and not args.host_id):
+        # Verify all deployments
+        results = verify_all_deployments(manager)
+        if not results:
+            print("No deployments to verify.")
+            return 0
+
+        print("Verification results:")
+        failed = 0
+        for key_id, host_id, success, error in results:
+            status = "OK" if success else f"FAILED: {error}"
+            print(f"  {key_id} -> {host_id}: {status}")
+            if not success:
+                failed += 1
+
+        if failed:
+            print(f"\n{failed} verification(s) failed.")
+            return 1
+        print(f"\nAll {len(results)} deployment(s) verified.")
+        return 0
+
+    elif args.key_id and args.host_id:
+        # Verify specific deployment
+        try:
+            success = verify_deployment(manager, args.key_id, args.host_id)
+            if success:
+                print(f"Verified: {args.key_id} -> {args.host_id}")
+                return 0
+            else:
+                print(f"Verification failed: {args.key_id} -> {args.host_id}")
+                return 1
+        except HostOperationError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
+    else:
+        print("Specify both key-id and host-id, or use --all", file=sys.stderr)
+        return 1
+
+
+def cmd_revoke(args):
+    """Revoke a key from host(s)."""
+    manager = get_manager()
+
+    if args.all:
+        # Revoke from all hosts
+        try:
+            results = revoke_key_from_all_hosts(manager, args.key_id)
+            if not results:
+                print(f"Key '{args.key_id}' has no deployments.")
+                return 0
+
+            failed = 0
+            for host_id, success, error in results:
+                status = "OK" if success else f"FAILED: {error}"
+                print(f"  Revoked from {host_id}: {status}")
+                if not success:
+                    failed += 1
+
+            if failed:
+                return 1
+            print(f"\nRevoked from all {len(results)} host(s).")
+            return 0
+        except HostOperationError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+    else:
+        # Revoke from specific host
+        try:
+            revoke_key(manager, args.key_id, args.host_id)
+            print(f"Revoked key '{args.key_id}' from host '{args.host_id}'")
+            return 0
+        except HostOperationError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
+
+def cmd_config_sync(args):
+    """Sync config to ~/.ssh/config."""
+    manager = get_manager()
+    try:
+        _, changes = sync_config(manager, dry_run=args.dry_run)
+        if not changes:
+            print("Config is up to date.")
+            return 0
+
+        if args.dry_run:
+            print("Would update ~/.ssh/config with:")
+        else:
+            print("Updated ~/.ssh/config:")
+
+        for change in changes:
+            print(f"  {change}")
+        return 0
+    except ConfigSyncError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_config_show(args):
+    """Show managed config entries."""
+    manager = get_manager()
+    entries = show_managed_entries(manager)
+
+    if not entries:
+        print("No managed entries.")
+        return 0
+
+    status = get_config_status()
+    print(f"Config file: {status['config_path']}")
+    print(f"Managed entries: {len(entries)}")
+    print()
+
+    for entry in entries:
+        print(f"Host {entry['host_alias']}")
+        print(f"    HostName {entry['hostname']}")
+        print(f"    User {entry['user']}")
+        if entry['port'] != 22:
+            print(f"    Port {entry['port']}")
+        if entry['identity_file']:
+            print(f"    IdentityFile {entry['identity_file']}")
+            print(f"    IdentitiesOnly yes")
+        print()
+
+    return 0
+
+
+def cmd_config_clean(args):
+    """Remove managed section from config."""
+    try:
+        removed = clean_managed_section(dry_run=args.dry_run)
+        if removed:
+            if args.dry_run:
+                print("Would remove managed section from ~/.ssh/config")
+            else:
+                print("Removed managed section from ~/.ssh/config")
+        else:
+            print("No managed section found.")
+        return 0
+    except ConfigSyncError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_audit(args):
+    """Run security audit."""
+    manager = get_manager()
+    report = run_audit(manager, key_id=args.key_id)
+
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(get_audit_summary(report))
+
+    if args.fix:
+        fixes = fix_permissions(manager)
+        if fixes:
+            print("\nApplied fixes:")
+            for fix in fixes:
+                print(f"  {fix}")
+        else:
+            print("\nNo auto-fixable issues found.")
+
+    return 0 if report.is_healthy() else 1
+
+
+def cmd_service_list(args):
+    """List available services and their requirements."""
+    services = list_builtin_services()
+
+    if args.format == "json":
+        print(json.dumps(services, indent=2))
+    else:
+        print("Available services and their SSH key requirements:")
+        print()
+        print(f"{'SERVICE':<15} {'ALGORITHM':<12} {'REQUIRED':<10} {'NOTES'}")
+        print("-" * 80)
+        for svc in services:
+            required = "yes" if svc["required"] else "no"
+            notes = svc["notes"][:40] + "..." if len(svc["notes"]) > 40 else svc["notes"]
+            print(f"{svc['id']:<15} {svc['algorithm']:<12} {required:<10} {notes}")
+        print()
+        print("Use: sshv key create <key-id> --for-service <service>")
+
+    return 0
+
+
+def cmd_service_show(args):
+    """Show service details."""
+    if args.service_id not in BUILTIN_SERVICES:
+        print(f"Service '{args.service_id}' not found.", file=sys.stderr)
+        print(f"Available: {', '.join(BUILTIN_SERVICES.keys())}", file=sys.stderr)
+        return 1
+
+    data = BUILTIN_SERVICES[args.service_id]
+    print(f"Service: {data['name']}")
+    print(f"  ID: {args.service_id}")
+
+    if data.get("required_algorithm"):
+        print(f"  Required algorithm: {data['required_algorithm'].upper()}")
+    else:
+        print(f"  Preferred algorithm: {data.get('preferred_algorithm', 'ed25519').upper()}")
+        print(f"  Supported: ed25519, ecdsa, rsa")
+
+    if data.get("min_key_bits"):
+        print(f"  Minimum key bits: {data['min_key_bits']}")
+
+    print(f"\n  Notes: {data.get('notes', 'None')}")
+
+    if data.get("fingerprints"):
+        print(f"\n  Server fingerprints:")
+        for fp_type, fp_value in data["fingerprints"].items():
+            print(f"    {fp_type}: {fp_value}")
+
+    if data.get("docs_url"):
+        print(f"\n  Documentation: {data['docs_url']}")
+
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="SSH Vault - SSH Key Lifecycle Management",
+        prog="sshv",
+    )
+    parser.add_argument("--version", action="version", version=f"sshv {VERSION}")
+
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # Key commands
+    key_parser = subparsers.add_parser("key", help="Key management")
+    key_sub = key_parser.add_subparsers(dest="key_command")
+
+    # key create
+    kc = key_sub.add_parser("create", help="Create a new key")
+    kc.add_argument("key_id", help="Unique identifier for this key")
+    kc.add_argument("--purpose", "-p", help="Description of key purpose")
+    kc.add_argument("--expires", "-e", default="2y", help="Expiry duration (default: 2y)")
+    kc.add_argument("--algorithm", "-a", choices=["ed25519", "ecdsa", "rsa"],
+                    help="Key algorithm (auto-selected if --for-service used)")
+    kc.add_argument("--for-service", "-s", metavar="SERVICE",
+                    help=f"Auto-select algorithm for service ({', '.join(BUILTIN_SERVICES.keys())})")
+    kc.add_argument("--no-passphrase", action="store_true", help="Create without passphrase")
+    kc.set_defaults(func=cmd_key_create)
+
+    # key list
+    kl = key_sub.add_parser("list", help="List all keys")
+    kl.add_argument("--format", "-f", default="table", choices=["table", "json"])
+    kl.set_defaults(func=cmd_key_list)
+
+    # key show
+    ks = key_sub.add_parser("show", help="Show key details")
+    ks.add_argument("key_id", help="Key ID to show")
+    ks.set_defaults(func=cmd_key_show)
+
+    # key delete
+    kd = key_sub.add_parser("delete", help="Delete a key")
+    kd.add_argument("key_id", help="Key ID to delete")
+    kd.add_argument("--force", action="store_true", help="Delete even if deployed")
+    kd.add_argument("--delete-files", action="store_true", help="Also delete key files")
+    kd.set_defaults(func=cmd_key_delete)
+
+    # key rotate
+    kr = key_sub.add_parser("rotate", help="Rotate a key")
+    kr.add_argument("key_id", help="Key ID to rotate")
+    kr.add_argument("--new-id", help="ID for new key")
+    kr.set_defaults(func=cmd_key_rotate)
+
+    # key import
+    ki = key_sub.add_parser("import", help="Import existing key")
+    ki.add_argument("key_id", help="ID to assign to this key")
+    ki.add_argument("path", help="Path to private key")
+    ki.add_argument("--purpose", "-p", help="Description of key purpose")
+    ki.add_argument("--expires", "-e", default="2y", help="Expiry duration (default: 2y)")
+    ki.set_defaults(func=cmd_key_import)
+
+    # Host commands
+    host_parser = subparsers.add_parser("host", help="Host management")
+    host_sub = host_parser.add_subparsers(dest="host_command")
+
+    # host add
+    ha = host_sub.add_parser("add", help="Add a host")
+    ha.add_argument("host_id", help="Unique identifier for this host")
+    ha.add_argument("--hostname", "-H", required=True, help="IP or DNS name")
+    ha.add_argument("--user", "-u", help="SSH username")
+    ha.add_argument("--port", "-p", type=int, default=22, help="SSH port")
+    ha.set_defaults(func=cmd_host_add)
+
+    # host list
+    hl = host_sub.add_parser("list", help="List all hosts")
+    hl.add_argument("--format", "-f", default="table", choices=["table", "json"])
+    hl.set_defaults(func=cmd_host_list)
+
+    # host show
+    hs = host_sub.add_parser("show", help="Show host details")
+    hs.add_argument("host_id", help="Host ID to show")
+    hs.set_defaults(func=cmd_host_show)
+
+    # host remove
+    hr = host_sub.add_parser("remove", help="Remove a host")
+    hr.add_argument("host_id", help="Host ID to remove")
+    hr.add_argument("--force", action="store_true", help="Remove even if keys deployed")
+    hr.set_defaults(func=cmd_host_remove)
+
+    # Deploy command
+    deploy_parser = subparsers.add_parser("deploy", help="Deploy key to host")
+    deploy_parser.add_argument("key_id", help="Key to deploy")
+    deploy_parser.add_argument("host_id", help="Target host")
+    deploy_parser.add_argument("--no-verify", action="store_true", help="Skip verification")
+    deploy_parser.set_defaults(func=cmd_deploy)
+
+    # Verify command
+    verify_parser = subparsers.add_parser("verify", help="Verify deployments")
+    verify_parser.add_argument("key_id", nargs="?", help="Key to verify")
+    verify_parser.add_argument("host_id", nargs="?", help="Host to verify")
+    verify_parser.add_argument("--all", action="store_true", help="Verify all deployments")
+    verify_parser.set_defaults(func=cmd_verify)
+
+    # Revoke command
+    revoke_parser = subparsers.add_parser("revoke", help="Revoke key from host")
+    revoke_parser.add_argument("key_id", help="Key to revoke")
+    revoke_parser.add_argument("host_id", nargs="?", help="Target host")
+    revoke_parser.add_argument("--all", action="store_true", help="Revoke from all hosts")
+    revoke_parser.set_defaults(func=cmd_revoke)
+
+    # Config commands
+    config_parser = subparsers.add_parser("config", help="SSH config management")
+    config_sub = config_parser.add_subparsers(dest="config_command")
+
+    # config sync
+    cs = config_sub.add_parser("sync", help="Sync to ~/.ssh/config")
+    cs.add_argument("--dry-run", action="store_true", help="Show changes without applying")
+    cs.set_defaults(func=cmd_config_sync)
+
+    # config show
+    csh = config_sub.add_parser("show", help="Show managed entries")
+    csh.set_defaults(func=cmd_config_show)
+
+    # config clean
+    cc = config_sub.add_parser("clean", help="Remove managed section")
+    cc.add_argument("--dry-run", action="store_true", help="Show changes without applying")
+    cc.set_defaults(func=cmd_config_clean)
+
+    # Audit command
+    audit_parser = subparsers.add_parser("audit", help="Security audit")
+    audit_parser.add_argument("key_id", nargs="?", help="Specific key to audit")
+    audit_parser.add_argument("--fix", action="store_true", help="Auto-fix permission issues")
+    audit_parser.add_argument("--json", action="store_true", help="JSON output")
+    audit_parser.set_defaults(func=cmd_audit)
+
+    # Service commands
+    service_parser = subparsers.add_parser("service", help="Service profiles (algorithm requirements)")
+    service_sub = service_parser.add_subparsers(dest="service_command")
+
+    # service list
+    sl = service_sub.add_parser("list", help="List available services")
+    sl.add_argument("--format", "-f", default="table", choices=["table", "json"])
+    sl.set_defaults(func=cmd_service_list)
+
+    # service show
+    ss = service_sub.add_parser("show", help="Show service details")
+    ss.add_argument("service_id", help="Service ID to show")
+    ss.set_defaults(func=cmd_service_show)
+
+    # Parse and execute
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        return 0
+
+    if args.command == "key" and not args.key_command:
+        key_parser.print_help()
+        return 0
+
+    if args.command == "host" and not args.host_command:
+        host_parser.print_help()
+        return 0
+
+    if args.command == "config" and not args.config_command:
+        config_parser.print_help()
+        return 0
+
+    if args.command == "service" and not args.service_command:
+        service_parser.print_help()
+        return 0
+
+    if hasattr(args, "func"):
+        return args.func(args)
+
+    parser.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

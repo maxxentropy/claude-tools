@@ -1,0 +1,820 @@
+#!/usr/bin/env python3
+"""
+Remote Hosts - Remote server access CLI.
+
+Allows connecting to predefined remote hosts and running commands.
+"""
+
+import argparse
+import getpass
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional, Dict, Any, List, Tuple
+
+# Try to import PyYAML
+try:
+    import yaml
+    HAS_YAML = True
+except ImportError:
+    HAS_YAML = False
+
+
+VERSION = "0.1.0"
+CONFIG_DIR = Path.home() / ".remote-hosts"
+HOSTS_FILE = CONFIG_DIR / "hosts.yaml"
+HISTORY_FILE = CONFIG_DIR / "history.log"
+KEYCHAIN_SERVICE = "rhost"  # Service name for keychain entries
+
+
+# ============================================================================
+# Keychain Functions (macOS Keychain for secure credential storage)
+# ============================================================================
+
+def keychain_set(account: str, password: str) -> bool:
+    """Store a password in the macOS Keychain."""
+    try:
+        # Delete existing entry first (ignore errors if not found)
+        subprocess.run(
+            ["security", "delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account],
+            capture_output=True,
+        )
+        # Add new entry
+        result = subprocess.run(
+            ["security", "add-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w", password],
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def keychain_get(account: str) -> Optional[str]:
+    """Retrieve a password from the macOS Keychain."""
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+        return None
+    except Exception:
+        return None
+
+
+def keychain_delete(account: str) -> bool:
+    """Delete a password from the macOS Keychain."""
+    try:
+        result = subprocess.run(
+            ["security", "delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account],
+            capture_output=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def keychain_list() -> List[str]:
+    """List all rhost credentials in the Keychain."""
+    try:
+        # Use security dump-keychain and grep for our service
+        result = subprocess.run(
+            ["security", "dump-keychain"],
+            capture_output=True,
+            text=True,
+        )
+        accounts = []
+        lines = result.stdout.split("\n")
+        in_our_service = False
+        for line in lines:
+            if f'"svce"<blob>="{KEYCHAIN_SERVICE}"' in line:
+                in_our_service = True
+            elif in_our_service and '"acct"<blob>="' in line:
+                # Extract account name
+                start = line.find('"acct"<blob>="') + len('"acct"<blob>="')
+                end = line.find('"', start)
+                if start > 0 and end > start:
+                    accounts.append(line[start:end])
+                in_our_service = False
+        return accounts
+    except Exception:
+        return []
+
+
+def make_cred_key(host_id: str, service: str, username: str) -> str:
+    """Create a keychain account key from host, service, and username."""
+    return f"{host_id}:{service}:{username}"
+
+
+def parse_cred_key(key: str) -> Tuple[str, str, str]:
+    """Parse a keychain account key into host, service, username."""
+    parts = key.split(":", 2)
+    if len(parts) == 3:
+        return parts[0], parts[1], parts[2]
+    return "", "", ""
+
+
+def ensure_config_dir():
+    """Ensure config directory exists."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def load_hosts() -> Dict[str, Any]:
+    """Load hosts configuration."""
+    if not HOSTS_FILE.exists():
+        return {"hosts": {}}
+
+    content = HOSTS_FILE.read_text()
+    if HAS_YAML:
+        return yaml.safe_load(content) or {"hosts": {}}
+    else:
+        return json.loads(content)
+
+
+def save_hosts(data: Dict[str, Any]):
+    """Save hosts configuration."""
+    ensure_config_dir()
+    if HAS_YAML:
+        content = yaml.dump(data, default_flow_style=False, sort_keys=False)
+    else:
+        content = json.dumps(data, indent=2)
+    HOSTS_FILE.write_text(content)
+
+
+def log_command(host_id: str, command: str, exit_code: int):
+    """Log command to history."""
+    ensure_config_dir()
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with open(HISTORY_FILE, "a") as f:
+        f.write(f"{timestamp} [{host_id}] (exit={exit_code}) {command}\n")
+
+
+def get_host(host_id: str) -> Optional[Dict[str, Any]]:
+    """Get a host by ID."""
+    data = load_hosts()
+    return data.get("hosts", {}).get(host_id)
+
+
+def build_ssh_command(host: Dict[str, Any], command: Optional[str] = None) -> List[str]:
+    """Build SSH command for a host."""
+    ssh_cmd = ["ssh"]
+
+    # Add key if specified
+    if host.get("key"):
+        key_path = Path(host["key"]).expanduser()
+        ssh_cmd.extend(["-i", str(key_path)])
+
+    # Add port if non-standard
+    if host.get("port", 22) != 22:
+        ssh_cmd.extend(["-p", str(host["port"])])
+
+    # Add common options for non-interactive use
+    ssh_cmd.extend([
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ConnectTimeout=10",
+    ])
+
+    # Add destination
+    destination = f"{host['user']}@{host['hostname']}"
+    ssh_cmd.append(destination)
+
+    # Add command if provided
+    if command:
+        ssh_cmd.append(command)
+
+    return ssh_cmd
+
+
+def run_ssh(host: Dict[str, Any], command: str, timeout: int = 30) -> tuple:
+    """Run SSH command and return (exit_code, stdout, stderr)."""
+    ssh_cmd = build_ssh_command(host, command)
+
+    try:
+        result = subprocess.run(
+            ssh_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return result.returncode, result.stdout, result.stderr
+    except subprocess.TimeoutExpired:
+        return -1, "", "Command timed out"
+    except Exception as e:
+        return -1, "", str(e)
+
+
+# Commands
+
+def cmd_add(args):
+    """Add a host."""
+    data = load_hosts()
+    hosts = data.setdefault("hosts", {})
+
+    if args.host_id in hosts and not args.force:
+        print(f"Host '{args.host_id}' already exists. Use --force to overwrite.", file=sys.stderr)
+        return 1
+
+    host = {
+        "hostname": args.hostname,
+        "user": args.user,
+    }
+
+    if args.key:
+        host["key"] = args.key
+    if args.port and args.port != 22:
+        host["port"] = args.port
+    if args.description:
+        host["description"] = args.description
+    if args.environment:
+        host["environment"] = args.environment
+    if args.docker:
+        host["docker"] = True
+
+    hosts[args.host_id] = host
+    save_hosts(data)
+
+    print(f"Added host: {args.host_id}")
+    print(f"  {args.user}@{args.hostname}")
+    return 0
+
+
+def cmd_list(args):
+    """List all hosts."""
+    data = load_hosts()
+    hosts = data.get("hosts", {})
+
+    if not hosts:
+        print("No hosts configured.")
+        print("Add one with: rhost add <host-id> --hostname <ip> --user <user>")
+        return 0
+
+    # Filter by environment if specified
+    if args.environment:
+        hosts = {k: v for k, v in hosts.items() if v.get("environment") == args.environment}
+
+    if args.format == "json":
+        print(json.dumps(hosts, indent=2))
+    else:
+        print(f"{'HOST':<20} {'USER':<12} {'HOSTNAME':<20} {'ENV':<8} {'DESCRIPTION'}")
+        print("-" * 85)
+        for host_id, host in hosts.items():
+            env = host.get("environment", "-")
+            desc = host.get("description", "")[:30]
+            docker = " [docker]" if host.get("docker") else ""
+            print(f"{host_id:<20} {host['user']:<12} {host['hostname']:<20} {env:<8} {desc}{docker}")
+
+    return 0
+
+
+def cmd_show(args):
+    """Show host details."""
+    host = get_host(args.host_id)
+    if not host:
+        print(f"Host '{args.host_id}' not found.", file=sys.stderr)
+        return 1
+
+    print(f"Host: {args.host_id}")
+    print(f"  Hostname: {host['hostname']}")
+    print(f"  User: {host['user']}")
+    print(f"  Port: {host.get('port', 22)}")
+    if host.get("key"):
+        print(f"  SSH Key: {host['key']}")
+    if host.get("description"):
+        print(f"  Description: {host['description']}")
+    if host.get("environment"):
+        print(f"  Environment: {host['environment']}")
+    if host.get("docker"):
+        print(f"  Docker: yes")
+
+    return 0
+
+
+def cmd_remove(args):
+    """Remove a host."""
+    data = load_hosts()
+    hosts = data.get("hosts", {})
+
+    if args.host_id not in hosts:
+        print(f"Host '{args.host_id}' not found.", file=sys.stderr)
+        return 1
+
+    del hosts[args.host_id]
+    save_hosts(data)
+    print(f"Removed host: {args.host_id}")
+    return 0
+
+
+def cmd_ping(args):
+    """Test host connectivity."""
+    host = get_host(args.host_id)
+    if not host:
+        print(f"Host '{args.host_id}' not found.", file=sys.stderr)
+        return 1
+
+    print(f"Testing connection to {args.host_id} ({host['user']}@{host['hostname']})...")
+
+    exit_code, stdout, stderr = run_ssh(host, "echo 'RHOST_PING_OK'", timeout=15)
+
+    if exit_code == 0 and "RHOST_PING_OK" in stdout:
+        print("Connection: OK")
+        return 0
+    else:
+        print(f"Connection: FAILED")
+        if stderr:
+            print(f"  Error: {stderr.strip()}")
+        return 1
+
+
+def cmd_exec(args):
+    """Execute command on host."""
+    host = get_host(args.host_id)
+    if not host:
+        print(f"Host '{args.host_id}' not found.", file=sys.stderr)
+        return 1
+
+    command = args.command
+    if args.sudo:
+        command = f"sudo {command}"
+
+    # Safety check for production
+    if host.get("environment") == "prod" and not args.yes:
+        print(f"WARNING: This is a PRODUCTION host!", file=sys.stderr)
+        print(f"Command: {command}", file=sys.stderr)
+        response = input("Are you sure? [y/N] ")
+        if response.lower() != "y":
+            print("Aborted.")
+            return 1
+
+    exit_code, stdout, stderr = run_ssh(host, command, timeout=args.timeout)
+
+    log_command(args.host_id, command, exit_code)
+
+    if stdout:
+        print(stdout, end="")
+    if stderr:
+        print(stderr, end="", file=sys.stderr)
+
+    return exit_code
+
+
+def cmd_docker(args):
+    """Run docker commands on host."""
+    host = get_host(args.host_id)
+    if not host:
+        print(f"Host '{args.host_id}' not found.", file=sys.stderr)
+        return 1
+
+    if not host.get("docker"):
+        print(f"Host '{args.host_id}' is not marked as a docker host.", file=sys.stderr)
+        print("Add --docker when creating the host, or update hosts.yaml", file=sys.stderr)
+        return 1
+
+    # Build docker command
+    docker_cmd = args.docker_command
+
+    if docker_cmd == "ps":
+        command = "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"
+    elif docker_cmd == "logs":
+        if not args.container:
+            print("Container name required for logs", file=sys.stderr)
+            return 1
+        command = f"docker logs"
+        if args.tail:
+            command += f" --tail {args.tail}"
+        if args.follow:
+            command += " -f"
+        command += f" {args.container}"
+    elif docker_cmd == "exec":
+        if not args.container or not args.cmd:
+            print("Container and command required for exec", file=sys.stderr)
+            return 1
+        command = f"docker exec {args.container} {args.cmd}"
+    elif docker_cmd == "restart":
+        if not args.container:
+            print("Container name required for restart", file=sys.stderr)
+            return 1
+        command = f"docker restart {args.container}"
+    else:
+        print(f"Unknown docker command: {docker_cmd}", file=sys.stderr)
+        return 1
+
+    exit_code, stdout, stderr = run_ssh(host, command, timeout=args.timeout)
+
+    log_command(args.host_id, f"docker {docker_cmd}", exit_code)
+
+    if stdout:
+        print(stdout, end="")
+    if stderr:
+        print(stderr, end="", file=sys.stderr)
+
+    return exit_code
+
+
+def cmd_logs(args):
+    """View logs on host."""
+    host = get_host(args.host_id)
+    if not host:
+        print(f"Host '{args.host_id}' not found.", file=sys.stderr)
+        return 1
+
+    command = "journalctl"
+    if args.service:
+        command += f" -u {args.service}"
+    if args.tail:
+        command += f" -n {args.tail}"
+    else:
+        command += " -n 50"
+    if args.since:
+        command += f" --since '{args.since}'"
+    command += " --no-pager"
+
+    exit_code, stdout, stderr = run_ssh(host, command, timeout=args.timeout)
+
+    if stdout:
+        print(stdout, end="")
+    if stderr:
+        print(stderr, end="", file=sys.stderr)
+
+    return exit_code
+
+
+def cmd_df(args):
+    """Check disk space on host."""
+    host = get_host(args.host_id)
+    if not host:
+        print(f"Host '{args.host_id}' not found.", file=sys.stderr)
+        return 1
+
+    exit_code, stdout, stderr = run_ssh(host, "df -h", timeout=15)
+
+    if stdout:
+        print(stdout, end="")
+    if stderr:
+        print(stderr, end="", file=sys.stderr)
+
+    return exit_code
+
+
+def cmd_free(args):
+    """Check memory on host."""
+    host = get_host(args.host_id)
+    if not host:
+        print(f"Host '{args.host_id}' not found.", file=sys.stderr)
+        return 1
+
+    exit_code, stdout, stderr = run_ssh(host, "free -h", timeout=15)
+
+    if stdout:
+        print(stdout, end="")
+    if stderr:
+        print(stderr, end="", file=sys.stderr)
+
+    return exit_code
+
+
+def cmd_get(args):
+    """Download file from host."""
+    host = get_host(args.host_id)
+    if not host:
+        print(f"Host '{args.host_id}' not found.", file=sys.stderr)
+        return 1
+
+    local_path = args.local_path or Path(args.remote_path).name
+
+    scp_cmd = ["scp"]
+    if host.get("key"):
+        key_path = Path(host["key"]).expanduser()
+        scp_cmd.extend(["-i", str(key_path)])
+    if host.get("port", 22) != 22:
+        scp_cmd.extend(["-P", str(host["port"])])
+
+    remote = f"{host['user']}@{host['hostname']}:{args.remote_path}"
+    scp_cmd.extend([remote, local_path])
+
+    result = subprocess.run(scp_cmd)
+    if result.returncode == 0:
+        print(f"Downloaded: {args.remote_path} -> {local_path}")
+    return result.returncode
+
+
+def cmd_put(args):
+    """Upload file to host."""
+    host = get_host(args.host_id)
+    if not host:
+        print(f"Host '{args.host_id}' not found.", file=sys.stderr)
+        return 1
+
+    scp_cmd = ["scp"]
+    if host.get("key"):
+        key_path = Path(host["key"]).expanduser()
+        scp_cmd.extend(["-i", str(key_path)])
+    if host.get("port", 22) != 22:
+        scp_cmd.extend(["-P", str(host["port"])])
+
+    remote = f"{host['user']}@{host['hostname']}:{args.remote_path}"
+    scp_cmd.extend([args.local_path, remote])
+
+    result = subprocess.run(scp_cmd)
+    if result.returncode == 0:
+        print(f"Uploaded: {args.local_path} -> {args.remote_path}")
+    return result.returncode
+
+
+# ============================================================================
+# Credential Commands
+# ============================================================================
+
+def cmd_cred_set(args):
+    """Store credentials in the macOS Keychain."""
+    host = get_host(args.host_id)
+    if not host:
+        print(f"Host '{args.host_id}' not found.", file=sys.stderr)
+        return 1
+
+    # Prompt for password securely
+    password = getpass.getpass(f"Password for {args.username}@{args.service} on {args.host_id}: ")
+    if not password:
+        print("Password cannot be empty.", file=sys.stderr)
+        return 1
+
+    # Confirm
+    password2 = getpass.getpass("Confirm password: ")
+    if password != password2:
+        print("Passwords do not match.", file=sys.stderr)
+        return 1
+
+    # Store in keychain
+    cred_key = make_cred_key(args.host_id, args.service, args.username)
+    if keychain_set(cred_key, password):
+        print(f"Stored credentials for {args.username}@{args.service} on {args.host_id}")
+        return 0
+    else:
+        print("Failed to store credentials in Keychain.", file=sys.stderr)
+        return 1
+
+
+def cmd_cred_list(args):
+    """List stored credentials."""
+    accounts = keychain_list()
+
+    if not accounts:
+        print("No credentials stored.")
+        return 0
+
+    print(f"{'HOST':<20} {'SERVICE':<15} {'USERNAME'}")
+    print("-" * 55)
+    for account in accounts:
+        host_id, service, username = parse_cred_key(account)
+        if host_id:  # Only show valid entries
+            print(f"{host_id:<20} {service:<15} {username}")
+
+    return 0
+
+
+def cmd_cred_delete(args):
+    """Delete stored credentials."""
+    cred_key = make_cred_key(args.host_id, args.service, args.username)
+
+    if keychain_delete(cred_key):
+        print(f"Deleted credentials for {args.username}@{args.service} on {args.host_id}")
+        return 0
+    else:
+        print("Credentials not found or could not be deleted.", file=sys.stderr)
+        return 1
+
+
+def cmd_mysql(args):
+    """Run MySQL command on host."""
+    host = get_host(args.host_id)
+    if not host:
+        print(f"Host '{args.host_id}' not found.", file=sys.stderr)
+        return 1
+
+    # Get credentials from keychain
+    cred_key = make_cred_key(args.host_id, "mysql", args.user)
+    password = keychain_get(cred_key)
+
+    if not password:
+        print(f"No MySQL credentials found for {args.user} on {args.host_id}.", file=sys.stderr)
+        print(f"Store them with: rhost cred set {args.host_id} mysql {args.user}", file=sys.stderr)
+        return 1
+
+    # Build MySQL command
+    mysql_cmd = f"mysql -u {args.user} -p'{password}'"
+    if args.database:
+        mysql_cmd += f" {args.database}"
+
+    if args.query:
+        # Single query mode
+        mysql_cmd += f" -e \"{args.query}\""
+    elif args.file:
+        # Execute from file - need to transfer file first or cat it
+        print("File execution not yet implemented. Use --query instead.", file=sys.stderr)
+        return 1
+
+    exit_code, stdout, stderr = run_ssh(host, mysql_cmd, timeout=args.timeout)
+
+    log_command(args.host_id, f"mysql query", exit_code)
+
+    if stdout:
+        print(stdout, end="")
+    if stderr:
+        # Filter out the password warning
+        for line in stderr.split("\n"):
+            if "Using a password on the command line" not in line and line.strip():
+                print(line, file=sys.stderr)
+
+    return exit_code
+
+
+def cmd_mysql_interactive(args):
+    """Start interactive MySQL session (opens in terminal)."""
+    host = get_host(args.host_id)
+    if not host:
+        print(f"Host '{args.host_id}' not found.", file=sys.stderr)
+        return 1
+
+    # Get credentials from keychain
+    cred_key = make_cred_key(args.host_id, "mysql", args.user)
+    password = keychain_get(cred_key)
+
+    if not password:
+        print(f"No MySQL credentials found for {args.user} on {args.host_id}.", file=sys.stderr)
+        print(f"Store them with: rhost cred set {args.host_id} mysql {args.user}", file=sys.stderr)
+        return 1
+
+    # Build command for interactive session
+    mysql_cmd = f"mysql -u {args.user} -p'{password}'"
+    if args.database:
+        mysql_cmd += f" {args.database}"
+
+    ssh_cmd = build_ssh_command(host, mysql_cmd)
+    # Remove BatchMode for interactive
+    ssh_cmd = [c for c in ssh_cmd if c != "BatchMode=yes" and c != "-o"]
+    # Re-add other options properly
+    ssh_cmd_clean = ["ssh"]
+    if host.get("key"):
+        ssh_cmd_clean.extend(["-i", str(Path(host["key"]).expanduser())])
+    if host.get("port", 22) != 22:
+        ssh_cmd_clean.extend(["-p", str(host["port"])])
+    ssh_cmd_clean.extend(["-t", f"{host['user']}@{host['hostname']}", mysql_cmd])
+
+    # Run interactively
+    result = subprocess.run(ssh_cmd_clean)
+    return result.returncode
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Remote Hosts - Remote server access",
+        prog="rhost",
+    )
+    parser.add_argument("--version", action="version", version=f"rhost {VERSION}")
+
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # add
+    add_p = subparsers.add_parser("add", help="Add a host")
+    add_p.add_argument("host_id", help="Unique identifier for this host")
+    add_p.add_argument("--hostname", "-H", required=True, help="IP or DNS name")
+    add_p.add_argument("--user", "-u", required=True, help="SSH username")
+    add_p.add_argument("--key", "-k", help="Path to SSH private key")
+    add_p.add_argument("--port", "-p", type=int, default=22, help="SSH port")
+    add_p.add_argument("--description", "-d", help="Host description")
+    add_p.add_argument("--environment", "-e", choices=["dev", "ppe", "prod"], help="Environment tag")
+    add_p.add_argument("--docker", action="store_true", help="Mark as docker host")
+    add_p.add_argument("--force", "-f", action="store_true", help="Overwrite existing")
+    add_p.set_defaults(func=cmd_add)
+
+    # list
+    list_p = subparsers.add_parser("list", help="List all hosts")
+    list_p.add_argument("--environment", "-e", help="Filter by environment")
+    list_p.add_argument("--format", "-f", default="table", choices=["table", "json"])
+    list_p.set_defaults(func=cmd_list)
+
+    # show
+    show_p = subparsers.add_parser("show", help="Show host details")
+    show_p.add_argument("host_id", help="Host ID")
+    show_p.set_defaults(func=cmd_show)
+
+    # remove
+    remove_p = subparsers.add_parser("remove", help="Remove a host")
+    remove_p.add_argument("host_id", help="Host ID")
+    remove_p.set_defaults(func=cmd_remove)
+
+    # ping
+    ping_p = subparsers.add_parser("ping", help="Test host connectivity")
+    ping_p.add_argument("host_id", help="Host ID")
+    ping_p.set_defaults(func=cmd_ping)
+
+    # exec
+    exec_p = subparsers.add_parser("exec", help="Execute command on host")
+    exec_p.add_argument("host_id", help="Host ID")
+    exec_p.add_argument("command", help="Command to run")
+    exec_p.add_argument("--sudo", "-s", action="store_true", help="Run with sudo")
+    exec_p.add_argument("--timeout", "-t", type=int, default=30, help="Timeout in seconds")
+    exec_p.add_argument("--yes", "-y", action="store_true", help="Skip confirmation for prod")
+    exec_p.set_defaults(func=cmd_exec)
+
+    # docker
+    docker_p = subparsers.add_parser("docker", help="Docker commands on host")
+    docker_p.add_argument("host_id", help="Host ID")
+    docker_p.add_argument("docker_command", choices=["ps", "logs", "exec", "restart"], help="Docker command")
+    docker_p.add_argument("container", nargs="?", help="Container name")
+    docker_p.add_argument("cmd", nargs="?", help="Command for exec")
+    docker_p.add_argument("--tail", type=int, help="Number of log lines")
+    docker_p.add_argument("--follow", "-f", action="store_true", help="Follow logs")
+    docker_p.add_argument("--timeout", "-t", type=int, default=30, help="Timeout in seconds")
+    docker_p.set_defaults(func=cmd_docker)
+
+    # logs
+    logs_p = subparsers.add_parser("logs", help="View system logs")
+    logs_p.add_argument("host_id", help="Host ID")
+    logs_p.add_argument("--service", "-u", help="Service name for journalctl")
+    logs_p.add_argument("--tail", "-n", type=int, help="Number of lines")
+    logs_p.add_argument("--since", help="Show logs since (e.g., '1 hour ago')")
+    logs_p.add_argument("--timeout", "-t", type=int, default=30, help="Timeout in seconds")
+    logs_p.set_defaults(func=cmd_logs)
+
+    # df
+    df_p = subparsers.add_parser("df", help="Check disk space")
+    df_p.add_argument("host_id", help="Host ID")
+    df_p.set_defaults(func=cmd_df)
+
+    # free
+    free_p = subparsers.add_parser("free", help="Check memory")
+    free_p.add_argument("host_id", help="Host ID")
+    free_p.set_defaults(func=cmd_free)
+
+    # get
+    get_p = subparsers.add_parser("get", help="Download file from host")
+    get_p.add_argument("host_id", help="Host ID")
+    get_p.add_argument("remote_path", help="Remote file path")
+    get_p.add_argument("local_path", nargs="?", help="Local destination")
+    get_p.set_defaults(func=cmd_get)
+
+    # put
+    put_p = subparsers.add_parser("put", help="Upload file to host")
+    put_p.add_argument("host_id", help="Host ID")
+    put_p.add_argument("local_path", help="Local file path")
+    put_p.add_argument("remote_path", help="Remote destination")
+    put_p.set_defaults(func=cmd_put)
+
+    # cred - credential management
+    cred_p = subparsers.add_parser("cred", help="Manage stored credentials (macOS Keychain)")
+    cred_sub = cred_p.add_subparsers(dest="cred_command")
+
+    # cred set
+    cred_set_p = cred_sub.add_parser("set", help="Store credentials")
+    cred_set_p.add_argument("host_id", help="Host ID")
+    cred_set_p.add_argument("service", help="Service name (e.g., mysql, postgres)")
+    cred_set_p.add_argument("username", help="Username")
+    cred_set_p.set_defaults(func=cmd_cred_set)
+
+    # cred list
+    cred_list_p = cred_sub.add_parser("list", help="List stored credentials")
+    cred_list_p.set_defaults(func=cmd_cred_list)
+
+    # cred delete
+    cred_del_p = cred_sub.add_parser("delete", help="Delete credentials")
+    cred_del_p.add_argument("host_id", help="Host ID")
+    cred_del_p.add_argument("service", help="Service name")
+    cred_del_p.add_argument("username", help="Username")
+    cred_del_p.set_defaults(func=cmd_cred_delete)
+
+    # mysql - MySQL commands
+    mysql_p = subparsers.add_parser("mysql", help="Run MySQL query on host")
+    mysql_p.add_argument("host_id", help="Host ID")
+    mysql_p.add_argument("--user", "-u", default="root", help="MySQL username (default: root)")
+    mysql_p.add_argument("--database", "-d", help="Database name")
+    mysql_p.add_argument("--query", "-e", help="SQL query to execute")
+    mysql_p.add_argument("--file", "-f", help="SQL file to execute")
+    mysql_p.add_argument("--timeout", "-t", type=int, default=60, help="Timeout in seconds")
+    mysql_p.set_defaults(func=cmd_mysql)
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        return 0
+
+    if args.command == "cred" and not args.cred_command:
+        cred_p.print_help()
+        return 0
+
+    if hasattr(args, "func"):
+        return args.func(args)
+
+    parser.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

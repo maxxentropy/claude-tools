@@ -12,20 +12,20 @@ Skills extend Claude Code with specialized workflows. Each skill has YAML frontm
 
 | Skill | Purpose | Location |
 |-------|---------|----------|
-| code-review | Per-change code review (C#, Python) - correctness, safety, patterns | `skills/code-review/` |
-| architecture-review | System-level architectural assessment - resilience, observability, design | `skills/architecture-review/` |
-| eval-framework | Capture, store, compare evaluations for consistency measurement | `skills/eval-framework/` |
-| docgen | Generate .NET documentation (architecture, API, domain models) | `skills/docgen/` |
-| azure-devops | Work items, pipelines, repositories via Azure CLI | `skills/azure-devops/` |
-| github | Issues, pull requests, repositories via GitHub CLI | `skills/github/` |
-| wsr-generator | Weekly status reports from git and ADO activity | `skills/wsr-generator/` |
-| ui-design-team | Cross-platform UI design and implementation | `skills/ui-design-team/` |
-| xtconnect-pi | Debug/manage XTConnect Raspberry Pi nodes - SSH, serial port, deployment | `skills/xtconnect-pi/` |
-| findings | **Persistent memory** - Cross-session discoveries, tech debt, handoff notes | `skills/findings/` |
+| code-review | Per-change code review (C#, Python) - correctness, safety, patterns | `~/.claude/skills/code-review/` |
+| architecture-review | System-level architectural assessment - resilience, observability, design | `~/.claude/skills/architecture-review/` |
+| eval-framework | Capture, store, compare evaluations for consistency measurement | `~/.claude/skills/eval-framework/` |
+| docgen | Generate .NET documentation (architecture, API, domain models) | `~/.claude/skills/docgen/` |
+| azure-devops | Work items, pipelines, repositories via Azure CLI | `~/.claude/skills/azure-devops/` |
+| github | Issues, pull requests, repositories via GitHub CLI | `~/.claude/skills/github/` |
+| wsr-generator | Weekly status reports from git and ADO activity | `~/.claude/skills/wsr-generator/` |
+| ui-design-team | Cross-platform UI design and implementation | `~/.claude/skills/ui-design-team/` |
+| xtconnect-pi | Debug/manage XTConnect Raspberry Pi nodes - SSH, serial port, deployment | `~/.claude/skills/xtconnect-pi/` |
+| findings | **Persistent memory** - Cross-session discoveries, tech debt, handoff notes | `~/.claude/skills/findings/` |
 
 ## Installed Agents
 
-Agents provide expert personas for complex reasoning tasks. Located in `agents/`.
+Agents provide expert personas for complex reasoning tasks. Located in `~/.claude/agents/`.
 
 | Agent | Purpose | Specialty |
 |-------|---------|-----------|
@@ -95,7 +95,7 @@ Agents provide expert personas for complex reasoning tasks. Located in `agents/`
 | **Purpose** | Structured workflows with reference materials | Expert personas with reasoning approaches |
 | **Context** | Load checklists, patterns, best practices | Apply expert judgment, deep analysis |
 | **Best for** | Systematic, repeatable processes | Complex problems requiring expertise |
-| **Location** | `skills/` | `agents/` |
+| **Location** | `~/.claude/skills/` | `~/.claude/agents/` |
 | **Examples** | code-review, architecture-review | software-architect, security-engineer |
 
 ## Common Workflows
@@ -148,14 +148,14 @@ Agents provide expert personas for complex reasoning tasks. Located in `agents/`
 
 Skills trigger automatically based on their `description` in YAML frontmatter. You can also invoke explicitly:
 - "Use the docgen skill to document this project"
-- "Read skills/azure-devops/SKILL.md and query my work items"
+- "Read ~/.claude/skills/azure-devops/SKILL.md and query my work items"
 
 ### Work Item Platform Selection
 
 When asked to create/query work items, bugs, tasks, or issues, detect the platform:
 
 ```bash
-python3 skills/detect-platform.py
+python3 ~/.claude/skills/detect-platform.py
 ```
 
 **Rules (in priority order):**
@@ -193,7 +193,7 @@ Project-level `CLAUDE.md` files override these global settings.
 ### Skill not triggering
 1. Check skill's YAML frontmatter has correct `description` with triggers
 2. Verify skill folder exists with SKILL.md
-3. Invoke explicitly: "Read skills/{name}/SKILL.md and..."
+3. Invoke explicitly: "Read ~/.claude/skills/{name}/SKILL.md and..."
 
 ### Azure CLI issues
 ```bash
@@ -369,10 +369,10 @@ At the beginning of significant work sessions, consider loading context:
 
 ```bash
 # Load previous session context
-python3 skills/findings/scripts/session_context.py --load
+python3 ~/.claude/skills/findings/scripts/session_context.py --load
 
 # See what's ready to work on
-python3 skills/findings/scripts/query_findings.py --ready
+python3 ~/.claude/skills/findings/scripts/query_findings.py --ready
 ```
 
 ### During Session: Capture Discoveries
@@ -380,7 +380,7 @@ python3 skills/findings/scripts/query_findings.py --ready
 When you discover something worth remembering:
 
 ```bash
-python3 skills/findings/scripts/query_findings.py --capture \
+python3 ~/.claude/skills/findings/scripts/query_findings.py --capture \
   --title "N+1 query in OrderService.GetAllWithDetails" \
   --severity medium \
   --type discovery \
@@ -402,7 +402,7 @@ python3 skills/findings/scripts/query_findings.py --capture \
 Before ending a significant session, save context:
 
 ```bash
-python3 skills/findings/scripts/session_context.py --save \
+python3 ~/.claude/skills/findings/scripts/session_context.py --save \
   --notes "Fixed the N+1 in GetAll, still need to address GetHistory" \
   --questions "Should we use Include() or explicit loading?"
 ```
@@ -416,7 +416,7 @@ When a finding should become official work:
 az boards work-item create --type "Task" --title "Fix N+1 query"
 
 # 2. Link finding to it
-python3 skills/findings/scripts/query_findings.py \
+python3 ~/.claude/skills/findings/scripts/query_findings.py \
   --promote f-abc123 --promote-to AB#5678
 ```
 
@@ -424,22 +424,22 @@ python3 skills/findings/scripts/query_findings.py \
 
 ```bash
 # Query
-python3 skills/findings/scripts/query_findings.py --open      # Open findings
-python3 skills/findings/scripts/query_findings.py --ready     # Ready to work
-python3 skills/findings/scripts/query_findings.py --search X  # Search
-python3 skills/findings/scripts/query_findings.py --stats     # Statistics
+python3 ~/.claude/skills/findings/scripts/query_findings.py --open      # Open findings
+python3 ~/.claude/skills/findings/scripts/query_findings.py --ready     # Ready to work
+python3 ~/.claude/skills/findings/scripts/query_findings.py --search X  # Search
+python3 ~/.claude/skills/findings/scripts/query_findings.py --stats     # Statistics
 
 # Capture
-python3 skills/findings/scripts/query_findings.py --capture --title "..." --severity medium
+python3 ~/.claude/skills/findings/scripts/query_findings.py --capture --title "..." --severity medium
 
 # Update
-python3 skills/findings/scripts/query_findings.py --resolve f-abc123
-python3 skills/findings/scripts/query_findings.py --promote f-abc123 --promote-to AB#1234
+python3 ~/.claude/skills/findings/scripts/query_findings.py --resolve f-abc123
+python3 ~/.claude/skills/findings/scripts/query_findings.py --promote f-abc123 --promote-to AB#1234
 
 # Session
-python3 skills/findings/scripts/session_context.py --load     # Start session
-python3 skills/findings/scripts/session_context.py --save     # End session
-python3 skills/findings/scripts/session_context.py --onboard  # Full context dump
+python3 ~/.claude/skills/findings/scripts/session_context.py --load     # Start session
+python3 ~/.claude/skills/findings/scripts/session_context.py --save     # End session
+python3 ~/.claude/skills/findings/scripts/session_context.py --onboard  # Full context dump
 ```
 
 ### Integration with Reviews
@@ -448,7 +448,7 @@ After architecture or code reviews, capture findings:
 
 ```bash
 # During review, capture each significant finding
-python3 skills/findings/scripts/query_findings.py --capture \
+python3 ~/.claude/skills/findings/scripts/query_findings.py --capture \
   --title "Thread safety issue in StateManager" \
   --severity critical \
   --type discovery \

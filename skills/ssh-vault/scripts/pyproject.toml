@@ -1,0 +1,17 @@
+[project]
+name = "ssh-vault-scripts"
+version = "0.1.0"
+description = "SSH Vault - SSH Key Lifecycle Management"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-mock>=3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
