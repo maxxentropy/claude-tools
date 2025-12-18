@@ -43,9 +43,13 @@ Git worktrees allow multiple working directories attached to the same repository
 
 **Example:**
 ```
-my-repo/                    # Main worktree
-my-repo-feature-AB#1234/    # Feature worktree (different branch)
-my-repo-review-pr-5678/     # Review worktree (another branch)
+~/source/projects/
+└── my-repo/                              # Main worktree (project directory stays clean)
+
+~/.worktrees/                             # Centralized worktree storage
+├── my-repo--feature-AB#1234-add-auth/    # Feature worktree
+├── my-repo--review-pr-5678/              # Review worktree
+└── other-repo--fix-AB#999-bug/           # From another repo
 ```
 
 ### When to Suggest Worktrees
@@ -733,19 +737,27 @@ worktree cleanup --merged
 
 ### Directory Organization
 
-**Recommended (sibling structure):**
+**Centralized structure (default):**
 ```
-~/source/
-├── my-repo/                      # Main worktree
-├── my-repo-feature-AB#1234/      # Feature worktrees (siblings)
-├── my-repo-review-pr-5678/       # Review worktrees
-└── my-repo-experiments/          # Experimental worktrees
+~/source/projects/                # Your project directories stay clean
+├── my-repo/                      # Main worktree only
+├── other-repo/
+└── another-project/
+
+~/.worktrees/                     # All worktrees in one hidden location
+├── my-repo--feature-AB#1234/     # Format: {repo}--{worktree-name}
+├── my-repo--review-pr-5678/
+├── other-repo--fix-AB#999/
+└── another-project--experiment/
 ```
 
 **Benefits:**
-- Simple paths
-- Works with existing tools
-- Easy to identify in file manager
+- Project directories stay clean (no clutter)
+- All worktrees in one place for easy cleanup
+- Hidden from normal file browsing
+- Clear naming shows which repo each belongs to
+
+**Custom location:** Set `WORKTREES_BASE` environment variable to change the base directory.
 
 ### Dependency Management
 

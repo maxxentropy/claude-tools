@@ -17,6 +17,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
 
+# Centralized worktrees directory (keeps project directories clean)
+WORKTREES_BASE="${WORKTREES_BASE:-$HOME/.worktrees}"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -66,6 +69,21 @@ slugify() {
         sed 's/^-//' | \
         sed 's/-$//' | \
         cut -c1-50
+}
+
+ensure_worktrees_dir() {
+    if [[ ! -d "$WORKTREES_BASE" ]]; then
+        mkdir -p "$WORKTREES_BASE"
+        print_info "Created worktrees directory: $WORKTREES_BASE"
+    fi
+}
+
+get_worktree_path() {
+    # Generate a worktree path in the centralized directory
+    # Args: repo_name, worktree_name
+    local repo_name="$1"
+    local worktree_name="$2"
+    echo "${WORKTREES_BASE}/${repo_name}--${worktree_name}"
 }
 
 # =============================================================================
@@ -234,9 +252,10 @@ create_from_work_item() {
 
     # Generate worktree path if not provided
     if [[ -z "$path" ]]; then
+        ensure_worktrees_dir
         local repo_name
         repo_name=$(basename "$REPO_ROOT")
-        path="../${repo_name}-${type}-AB#${work_item_id}-${slug}"
+        path=$(get_worktree_path "$repo_name" "${type}-AB#${work_item_id}-${slug}")
     fi
 
     # Validate path doesn't exist
@@ -351,9 +370,10 @@ create_from_pr() {
 
     # Generate path
     if [[ -z "$path" ]]; then
+        ensure_worktrees_dir
         local repo_name
         repo_name=$(basename "$REPO_ROOT")
-        path="../${repo_name}-review-pr-${pr_id}"
+        path=$(get_worktree_path "$repo_name" "review-pr-${pr_id}")
     fi
 
     # Validate path doesn't exist
@@ -415,11 +435,12 @@ create_from_branch() {
 
     # Generate path
     if [[ -z "$path" ]]; then
+        ensure_worktrees_dir
         local repo_name
         repo_name=$(basename "$REPO_ROOT")
         local slug
         slug=$(slugify "$branch_name")
-        path="../${repo_name}-${slug}"
+        path=$(get_worktree_path "$repo_name" "$slug")
     fi
 
     # Validate path doesn't exist
@@ -486,9 +507,10 @@ create_from_main() {
 
     # Generate path
     if [[ -z "$path" ]]; then
+        ensure_worktrees_dir
         local repo_name
         repo_name=$(basename "$REPO_ROOT")
-        path="../${repo_name}-${name}"
+        path=$(get_worktree_path "$repo_name" "$name")
     fi
 
     # Validate path doesn't exist

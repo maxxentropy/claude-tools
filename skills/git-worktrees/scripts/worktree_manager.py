@@ -38,7 +38,7 @@ class WorktreeManager:
             # Default configuration
             return {
                 "version": "1.0",
-                "basePath": "../",
+                "basePath": str(Path.home() / ".worktrees"),
                 "defaultIDE": "auto",
                 "autoInstallDeps": True,
                 "autoCleanup": False,
