@@ -33,6 +33,27 @@ worktree cleanup --merged
 
 ## Core Concepts
 
+### Base Branch Detection
+
+Worktrees automatically detect the correct base branch for your repository:
+
+- **GitFlow repos** (with `develop` branch): Uses `develop` as base
+- **GitHub Flow repos** (with `main` or `master`): Uses `main`/`master` as base
+
+This prevents the common mistake of creating feature branches off `main` when you should be branching from `develop`.
+
+**How it works:**
+1. First worktree creation auto-detects and saves to config
+2. Subsequent creations use the saved configuration
+3. Override per-repo with: `worktree config baseBranch <branch>`
+4. Override per-command with: `--base <branch>`
+
+**Example output:**
+```
+✓ Auto-detected GitFlow workflow → using 'develop' as base
+→ Saved to config. Change with: worktree config baseBranch <branch>
+```
+
 ### What are Git Worktrees?
 
 Git worktrees allow multiple working directories attached to the same repository. Each worktree:
@@ -234,13 +255,13 @@ Creates a new worktree with smart defaults.
 - `fix <work-item-id>` - Create fix branch from work item
 - `pr <pr-id>` - Create from PR (GitHub or Azure DevOps)
 - `branch <branch-name>` - Create from arbitrary branch
-- `main [name]` - Create additional main branch worktree
+- `base [name]` - Create additional worktree from base branch (develop/main)
 
 **Options:**
 - `--path <path>` - Custom path (default: auto-generated)
-- `--base <branch>` - Base branch (default: main)
+- `--base <branch>` - Override base branch (default: auto-detected)
 - `--no-deps` - Skip dependency installation
-- `--ide <ide>` - Open in IDE (code, idea, pycharm, none)
+- `--ide <ide>` - Open in IDE (code, rider, idea, pycharm, webstorm, goland, auto, none)
 
 **Examples:**
 
@@ -605,8 +626,10 @@ Located at `.git/worktree/config.json` (shared across worktrees):
 ```json
 {
   "version": "1.0",
-  "basePath": "../",
-  "defaultIDE": "code",
+  "basePath": "~/.worktrees",
+  "baseBranch": null,
+  "branchingStrategy": null,
+  "defaultIDE": "auto",
   "autoInstallDeps": true,
   "autoCleanup": false,
   "staleThresholdDays": 7,
@@ -615,20 +638,33 @@ Located at `.git/worktree/config.json` (shared across worktrees):
 }
 ```
 
+**Key settings:**
+- `baseBranch` - The default branch for new worktrees (auto-detected on first use)
+- `branchingStrategy` - Detected workflow: "gitflow", "github-flow", or "trunk"
+
 ### Get/Set Configuration
 
 ```bash
 # View all settings
 worktree config
 
+# Set base branch (for GitFlow repos)
+worktree config baseBranch develop
+
+# Set base branch (for GitHub Flow repos)
+worktree config baseBranch main
+
+# View current base branch setting
+worktree config baseBranch
+
 # Set default IDE
-worktree config worktree.defaultIDE code
+worktree config defaultIDE rider
 
 # Enable auto-cleanup
-worktree config worktree.autoCleanup true
+worktree config autoCleanup true
 
 # Set stale threshold
-worktree config worktree.staleThresholdDays 14
+worktree config staleThresholdDays 14
 ```
 
 ## Troubleshooting
@@ -786,10 +822,10 @@ worktree create pr 5678
 ╚══════════════════════════════════════════════════════════════════╝
 
 CREATE WORKTREES:
-  worktree create feature <ID>          From work item
+  worktree create feature <ID>          From work item (auto-detects base)
   worktree create pr <ID>               For PR review
   worktree create branch <name>         From branch
-  worktree create main stable           Extra main copy
+  worktree create base stable           Extra copy of base branch
 
 MANAGE WORKTREES:
   worktree list                         List all
@@ -805,6 +841,12 @@ CLEAN UP:
 IDE INTEGRATION:
   worktree open <name>                  Open in IDE
   worktree open <name> --ide code       Open in VS Code
+
+CONFIGURE BASE BRANCH:
+  worktree config baseBranch            Show current setting
+  worktree config baseBranch develop    Set to develop (GitFlow)
+  worktree config baseBranch main       Set to main (GitHub Flow)
+  worktree create feature 1234 --base main  One-time override
 
 COMMON WORKFLOWS:
   # Parallel features

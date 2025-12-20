@@ -12,7 +12,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class WorktreeManager:
@@ -33,12 +33,20 @@ class WorktreeManager:
         """Load worktree configuration."""
         if self.config_path.exists():
             with open(self.config_path, "r") as f:
-                return json.load(f)
+                config = json.load(f)
+                # Ensure new fields exist for backwards compatibility
+                if "baseBranch" not in config:
+                    config["baseBranch"] = None
+                if "branchingStrategy" not in config:
+                    config["branchingStrategy"] = None
+                return config
         else:
             # Default configuration
             return {
                 "version": "1.0",
                 "basePath": str(Path.home() / ".worktrees"),
+                "baseBranch": None,  # Will be auto-detected on first use
+                "branchingStrategy": None,  # gitflow, github-flow, or trunk
                 "defaultIDE": "auto",
                 "autoInstallDeps": True,
                 "autoCleanup": False,
@@ -87,6 +95,97 @@ class WorktreeManager:
 
         self.save_config()
         return True
+
+    def detect_base_branch(self) -> Tuple[str, str]:
+        """
+        Detect base branch and branching strategy.
+
+        Returns:
+            Tuple of (branch_name, strategy_name)
+
+        Raises:
+            ValueError: If no standard base branch is found
+        """
+        # Get local branches
+        result = subprocess.run(
+            ["git", "branch", "--list"],
+            capture_output=True,
+            text=True,
+            cwd=self.repo_root,
+        )
+        local_branches = {
+            b.strip().lstrip("* ") for b in result.stdout.splitlines() if b.strip()
+        }
+
+        # Get remote branches
+        result = subprocess.run(
+            ["git", "branch", "-r", "--list", "origin/*"],
+            capture_output=True,
+            text=True,
+            cwd=self.repo_root,
+        )
+        remote_branches = {
+            b.strip().replace("origin/", "")
+            for b in result.stdout.splitlines()
+            if b.strip() and "HEAD" not in b
+        }
+
+        all_branches = local_branches | remote_branches
+
+        # Priority: develop (GitFlow) > main (GitHub Flow) > master (Legacy)
+        if "develop" in all_branches:
+            return ("develop", "gitflow")
+        elif "main" in all_branches:
+            return ("main", "github-flow")
+        elif "master" in all_branches:
+            return ("master", "github-flow")
+        else:
+            # List available branches in error
+            branch_list = sorted(all_branches)[:10]
+            raise ValueError(
+                f"No standard base branch found (develop, main, or master).\n"
+                f"Available branches: {', '.join(branch_list)}\n"
+                f"Set manually with: worktree config baseBranch <branch>"
+            )
+
+    def get_base_branch(self, explicit_override: Optional[str] = None) -> Tuple[str, str, bool]:
+        """
+        Get the base branch to use for worktree creation.
+
+        Args:
+            explicit_override: Explicit --base flag value (takes precedence)
+
+        Returns:
+            Tuple of (branch_name, source_description, was_auto_detected)
+            source_description is one of: "explicit", "configured", "auto-detected"
+
+        Raises:
+            ValueError: If no base branch configured and detection fails
+        """
+        # 1. Explicit override wins
+        if explicit_override:
+            return (explicit_override, "explicit", False)
+
+        # 2. Check config
+        if self.config.get("baseBranch"):
+            return (self.config["baseBranch"], "configured", False)
+
+        # 3. Try auto-detection (first-time use)
+        try:
+            base_branch, strategy = self.detect_base_branch()
+            # Save to config for future use
+            self.config["baseBranch"] = base_branch
+            self.config["branchingStrategy"] = strategy
+            self.save_config()
+            return (base_branch, "auto-detected", True)
+        except ValueError as e:
+            raise ValueError(
+                f"No base branch configured and auto-detection failed.\n\n"
+                f"{e}\n\n"
+                f"Options:\n"
+                f"  1. Configure permanently:  worktree config baseBranch <branch>\n"
+                f"  2. Specify per-command:    worktree create feature 1234 --base <branch>"
+            )
 
     def track_create(
         self,
@@ -207,10 +306,12 @@ class WorktreeManager:
         return enriched
 
     def is_branch_merged(self, branch: str) -> bool:
-        """Check if branch is merged into main."""
+        """Check if branch is merged into base branch."""
         try:
+            # Use configured base branch instead of hardcoded 'main'
+            base_branch = self.config.get("baseBranch") or "main"
             result = subprocess.run(
-                ["git", "branch", "--merged", "main"],
+                ["git", "branch", "--merged", base_branch],
                 capture_output=True,
                 text=True,
                 cwd=self.repo_root,
@@ -226,9 +327,13 @@ class WorktreeManager:
         candidates: List[str] = []
         worktrees = self.list_worktrees()
 
+        # Get base branch to skip it
+        base_branch = self.config.get("baseBranch") or "main"
+        protected_branches = {base_branch, "main", "master", "develop"}
+
         for wt in worktrees:
-            # Skip main worktree
-            if wt.get("branch") in ["main", "master"]:
+            # Skip protected branches (base, main, master, develop)
+            if wt.get("branch") in protected_branches:
                 continue
 
             if all_worktrees:
@@ -304,6 +409,11 @@ def main():
     config_cmd = subparsers.add_parser("config", help="Get/set configuration")
     config_cmd.add_argument("key", nargs="?")
     config_cmd.add_argument("value", nargs="?")
+
+    # get-base
+    get_base = subparsers.add_parser("get-base", help="Get base branch for worktree creation")
+    get_base.add_argument("--explicit", help="Explicit override (--base flag value)")
+    get_base.add_argument("--json", action="store_true", help="Output as JSON")
 
     args = parser.parse_args()
 
@@ -389,6 +499,29 @@ def main():
             # Set value
             manager.set_config_value(args.key, args.value)
             print(f"Set {args.key} = {args.value}")
+
+    elif args.command == "get-base":
+        try:
+            branch, source, was_detected = manager.get_base_branch(
+                explicit_override=args.explicit
+            )
+            if args.json:
+                result = {
+                    "branch": branch,
+                    "source": source,
+                    "wasAutoDetected": was_detected,
+                    "strategy": manager.config.get("branchingStrategy"),
+                }
+                print(json.dumps(result))
+            else:
+                print(branch)
+                if was_detected:
+                    strategy = manager.config.get("branchingStrategy", "unknown")
+                    print(f"# Auto-detected: {strategy} workflow", file=sys.stderr)
+                    print(f"# Saved to config. Change with: worktree config baseBranch <branch>", file=sys.stderr)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":

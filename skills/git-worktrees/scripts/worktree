@@ -14,7 +14,9 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The actual skill scripts directory (Python helpers are here)
+SKILL_DIR="$HOME/.claude/skills/git-worktrees/scripts"
+SCRIPT_DIR="$SKILL_DIR"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
 
 # Centralized worktrees directory (keeps project directories clean)
@@ -84,6 +86,59 @@ get_worktree_path() {
     local repo_name="$1"
     local worktree_name="$2"
     echo "${WORKTREES_BASE}/${repo_name}--${worktree_name}"
+}
+
+get_base_branch() {
+    # Get the base branch for worktree creation
+    # Uses Python helper to detect/configure the branch
+    # Args: explicit_override (optional --base flag value)
+    local explicit_override="$1"
+
+    local result
+    local exit_code
+
+    if [[ -n "$explicit_override" ]]; then
+        result=$(python3 "$SCRIPT_DIR/worktree_manager.py" get-base --explicit "$explicit_override" --json 2>&1)
+        exit_code=$?
+    else
+        result=$(python3 "$SCRIPT_DIR/worktree_manager.py" get-base --json 2>&1)
+        exit_code=$?
+    fi
+
+    if [[ $exit_code -ne 0 ]]; then
+        print_error "Failed to determine base branch"
+        echo ""
+        echo "$result"
+        exit 1
+    fi
+
+    # Parse JSON response
+    local branch source was_detected strategy
+    branch=$(echo "$result" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d['branch'])")
+    source=$(echo "$result" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d['source'])")
+    was_detected=$(echo "$result" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d['wasAutoDetected'])")
+    strategy=$(echo "$result" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('strategy', ''))")
+
+    # Show informative message based on source (send to stderr so it doesn't pollute return value)
+    case "$source" in
+        explicit)
+            print_info "Using base branch: $branch (from --base flag)" >&2
+            ;;
+        configured)
+            print_info "Using base branch: $branch (from config)" >&2
+            ;;
+        auto-detected)
+            if [[ "$strategy" == "gitflow" ]]; then
+                print_success "Auto-detected GitFlow workflow → using '$branch' as base" >&2
+            else
+                print_success "Auto-detected GitHub Flow workflow → using '$branch' as base" >&2
+            fi
+            print_info "Saved to config. Change with: worktree config baseBranch <branch>" >&2
+            ;;
+    esac
+
+    # Return the branch name (only this goes to stdout)
+    echo "$branch"
 }
 
 # =============================================================================
@@ -167,13 +222,13 @@ cmd_create() {
     shift 2 || {
         print_error "Missing type and identifier"
         echo "Usage: worktree create <type> <identifier> [options]"
-        echo "Types: feature, fix, task, pr, branch, main"
+        echo "Types: feature, fix, task, pr, branch, base"
         exit 1
     }
 
     # Parse options
     local path=""
-    local base_branch="main"
+    local explicit_base=""  # Will be resolved via get_base_branch()
     local no_deps=false
     local ide="auto"
 
@@ -184,7 +239,7 @@ cmd_create() {
                 shift 2
                 ;;
             --base)
-                base_branch="$2"
+                explicit_base="$2"  # Explicit override
                 shift 2
                 ;;
             --no-deps)
@@ -207,6 +262,9 @@ cmd_create() {
     # Dispatch to type-specific handler
     case "$type" in
         feature|fix|task)
+            # Resolve base branch (auto-detect or use explicit)
+            local base_branch
+            base_branch=$(get_base_branch "$explicit_base")
             create_from_work_item "$type" "$identifier" "$path" "$base_branch" "$no_deps" "$ide"
             ;;
         pr)
@@ -215,12 +273,22 @@ cmd_create() {
         branch)
             create_from_branch "$identifier" "$path" "$no_deps" "$ide"
             ;;
+        base)
+            # Create worktree from base branch (develop or main)
+            local base_branch
+            base_branch=$(get_base_branch "$explicit_base")
+            create_from_base "${identifier:-stable}" "$path" "$base_branch" "$no_deps" "$ide"
+            ;;
         main)
-            create_from_main "${identifier:-stable}" "$path" "$no_deps" "$ide"
+            # Deprecated: use 'base' instead
+            print_warning "'worktree create main' is deprecated. Use 'worktree create base' instead."
+            local base_branch
+            base_branch=$(get_base_branch "$explicit_base")
+            create_from_base "${identifier:-stable}" "$path" "$base_branch" "$no_deps" "$ide"
             ;;
         *)
             print_error "Unknown type: $type"
-            echo "Valid types: feature, fix, task, pr, branch, main"
+            echo "Valid types: feature, fix, task, pr, branch, base"
             exit 1
             ;;
     esac
@@ -499,11 +567,12 @@ create_from_branch() {
     echo "  cd $path"
 }
 
-create_from_main() {
+create_from_base() {
     local name="$1"
     local path="$2"
-    local no_deps="$3"
-    local ide="$4"
+    local base_branch="$3"
+    local no_deps="$4"
+    local ide="$5"
 
     # Generate path
     if [[ -z "$path" ]]; then
@@ -519,29 +588,28 @@ create_from_main() {
         exit 1
     fi
 
-    # Ensure main is up to date
-    print_info "Fetching latest main..."
-    git fetch origin main 2>/dev/null || git fetch origin master 2>/dev/null || true
+    # Ensure base branch is up to date
+    print_info "Fetching latest $base_branch..."
+    git fetch origin "$base_branch" 2>/dev/null || true
 
-    # Create worktree from main
-    print_info "Creating worktree from main..."
-    git worktree add "$path" main 2>/dev/null || \
-        git worktree add "$path" master 2>/dev/null || \
-        git worktree add "$path" origin/main
+    # Create worktree from base branch
+    print_info "Creating worktree from $base_branch..."
+    git worktree add "$path" "$base_branch" 2>/dev/null || \
+        git worktree add "$path" "origin/$base_branch"
 
     local abs_path
     abs_path=$(cd "$path" && pwd)
 
     print_success "Created worktree: $(basename "$path")"
     echo "  Path: $abs_path"
-    echo "  Branch: main"
+    echo "  Branch: $base_branch"
 
     # Track metadata
     python3 "$SCRIPT_DIR/worktree_manager.py" \
         track-create \
         --name "$(basename "$path")" \
         --path "$abs_path" \
-        --branch "main"
+        --branch "$base_branch"
 
     # Install dependencies
     if [[ "$no_deps" != "true" ]]; then
@@ -946,22 +1014,30 @@ usage() {
     echo "  task <work-item-id>      Create task branch from work item"
     echo "  pr <pr-id>               Create from PR (GitHub or Azure DevOps)"
     echo "  branch <branch-name>     Create from arbitrary branch"
-    echo "  main [name]              Create extra copy from main"
+    echo "  base [name]              Create extra copy from base branch"
     echo ""
     echo -e "${CYAN}Create Options:${NC}"
     echo "  --path <path>            Custom worktree path"
-    echo "  --base <branch>          Base branch (default: main)"
+    echo "  --base <branch>          Override base branch (auto-detects develop/main)"
     echo "  --no-deps                Skip dependency installation"
     echo "  --ide <ide>              IDE to open (code, rider, idea, pycharm, auto, none)"
     echo ""
+    echo -e "${CYAN}Base Branch Detection:${NC}"
+    echo "  GitFlow repos (develop exists):     Uses 'develop' as base"
+    echo "  GitHub Flow repos (main/master):    Uses 'main' or 'master' as base"
+    echo "  Override per-repo:  worktree config baseBranch <branch>"
+    echo "  Override per-call:  worktree create feature 1234 --base <branch>"
+    echo ""
     echo -e "${CYAN}Examples:${NC}"
-    echo "  worktree create feature 1234            # From work item"
+    echo "  worktree create feature 1234            # From work item (base auto-detected)"
+    echo "  worktree create feature 1234 --base develop  # Explicit base"
     echo "  worktree create pr 5678                 # For PR review"
     echo "  worktree create branch experiment       # From branch"
     echo "  worktree create feature 1234 --ide rider  # Open in Rider"
     echo "  worktree list --verbose                 # Detailed list"
     echo "  worktree cleanup --merged               # Remove merged"
     echo "  worktree open my-feature --ide code     # Open in VS Code"
+    echo "  worktree config baseBranch develop      # Set default base branch"
     echo ""
     echo -e "${CYAN}Supported IDEs:${NC}"
     echo "  code      Visual Studio Code"
