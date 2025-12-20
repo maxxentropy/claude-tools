@@ -35,6 +35,10 @@ from node_context import (
     load_context, save_context, find_context_dir, get_default_ssh_key,
     get_current_hostname, Colors, color
 )
+from rhost_integration import (
+    rhost_available, register_nodes_batch, find_xtconnect_host,
+    get_ssh_config_from_rhost, list_xtconnect_hosts
+)
 
 
 def get_client(context: dict, hostname: Optional[str] = None) -> tuple[PiClient, str]:
@@ -44,20 +48,39 @@ def get_client(context: dict, hostname: Optional[str] = None) -> tuple[PiClient,
         print(color("No node connected. Use 'xtpi connect <hostname>' first.", Colors.RED))
         sys.exit(1)
 
-    # Normalize hostname
-    if not hostname.endswith(".local") and "." not in hostname:
-        hostname = f"xtconnect-{hostname}.local"
-    elif not hostname.endswith(".local"):
-        hostname = f"{hostname}.local"
-    if not hostname.startswith("xtconnect-") and "xtconnect" not in hostname:
-        hostname = f"xtconnect-{hostname}"
+    # Check rhost for this host first (allows centralized SSH config)
+    rhost_config = None
+    if rhost_available():
+        rhost_config = get_ssh_config_from_rhost(hostname)
+        if rhost_config and rhost_config.get("hostname"):
+            # Use hostname from rhost (may be more complete)
+            hostname = rhost_config["hostname"]
 
+    # Normalize hostname if not found in rhost
+    if not rhost_config:
+        if not hostname.endswith(".local") and "." not in hostname:
+            hostname = f"xtconnect-{hostname}.local"
+        elif not hostname.endswith(".local"):
+            hostname = f"{hostname}.local"
+        if not hostname.startswith("xtconnect-") and "xtconnect" not in hostname:
+            hostname = f"xtconnect-{hostname}"
+
+    # Get SSH config (rhost takes precedence, then local context, then defaults)
     ssh_config = context.get("ssh_config", {})
+    user = ssh_config.get("user", "pi")
+    key_path = ssh_config.get("key_path", get_default_ssh_key())
+    timeout = ssh_config.get("timeout", 10)
+
+    if rhost_config:
+        user = rhost_config.get("user") or user
+        if rhost_config.get("key_path"):
+            key_path = rhost_config["key_path"]
+
     client = PiClient(
         hostname=hostname,
-        user=ssh_config.get("user", "pi"),
-        key_path=os.path.expanduser(ssh_config.get("key_path", get_default_ssh_key())),
-        timeout=ssh_config.get("timeout", 10)
+        user=user,
+        key_path=os.path.expanduser(key_path),
+        timeout=timeout
     )
     return client, hostname
 
@@ -124,6 +147,25 @@ def cmd_discover(args):
     print(f"Total: {len(nodes)} node(s)")
     if current:
         print(f"* = current node")
+
+    # Auto-register discovered nodes in rhost
+    if nodes and rhost_available():
+        ssh_key = context.get("ssh_config", {}).get("key_path", get_default_ssh_key())
+        node_dicts = [
+            {
+                "hostname": n.hostname,
+                "node_id": n.node_id,
+                "ip_address": n.ip_address,
+                "node_type": n.node_type,
+            }
+            for n in nodes if n.online
+        ]
+        registered = register_nodes_batch(node_dicts, ssh_key=ssh_key)
+        if registered > 0:
+            print()
+            print(color(f"Registered {registered} node(s) in rhost", Colors.DIM))
+            print(color("  View with: rhost list --environment xtconnect", Colors.DIM))
+
     return 0
 
 
@@ -526,6 +568,12 @@ def cmd_fleet(args):
     if current:
         hostnames.add(current)
 
+    # Include nodes from rhost
+    if rhost_available():
+        for host in list_xtconnect_hosts():
+            if host.get("hostname"):
+                hostnames.add(host["hostname"])
+
     # Discover more
     if args.discover:
         print("Discovering additional nodes...")
@@ -542,11 +590,22 @@ def cmd_fleet(args):
     results = {}
 
     def check_node(hostname):
+        # Get SSH config (check rhost first, then local context)
         ssh_config = context.get("ssh_config", {})
+        user = ssh_config.get("user", "pi")
+        key_path = ssh_config.get("key_path", get_default_ssh_key())
+
+        if rhost_available():
+            rhost_cfg = get_ssh_config_from_rhost(hostname)
+            if rhost_cfg:
+                user = rhost_cfg.get("user") or user
+                if rhost_cfg.get("key_path"):
+                    key_path = rhost_cfg["key_path"]
+
         client = PiClient(
             hostname=hostname,
-            user=ssh_config.get("user", "pi"),
-            key_path=os.path.expanduser(ssh_config.get("key_path", get_default_ssh_key())),
+            user=user,
+            key_path=os.path.expanduser(key_path),
             timeout=5
         )
 
