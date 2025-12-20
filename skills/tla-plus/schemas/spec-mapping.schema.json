@@ -1,0 +1,132 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://claude-tools/schemas/spec-mapping.json",
+  "title": "TLA+ Code-Spec Mapping",
+  "description": "Bidirectional mapping between TLA+ specifications and source code",
+  "type": "object",
+  "required": ["models"],
+  "properties": {
+    "models": {
+      "type": "object",
+      "description": "Mappings organized by model name",
+      "additionalProperties": {
+        "$ref": "#/definitions/ModelMapping"
+      }
+    }
+  },
+  "definitions": {
+    "ModelMapping": {
+      "type": "object",
+      "required": ["description"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "What this model verifies"
+        },
+        "actions": {
+          "type": "object",
+          "description": "TLA+ actions mapped to code methods",
+          "additionalProperties": {
+            "$ref": "#/definitions/ActionMapping"
+          }
+        },
+        "variables": {
+          "type": "object",
+          "description": "TLA+ variables mapped to data storage",
+          "additionalProperties": {
+            "$ref": "#/definitions/VariableMapping"
+          }
+        },
+        "constants": {
+          "type": "object",
+          "description": "TLA+ constants mapped to code constants",
+          "additionalProperties": {
+            "type": "string",
+            "description": "Code constant reference (e.g., 'ClassName.ConstantName')"
+          }
+        },
+        "invariants": {
+          "type": "object",
+          "description": "TLA+ invariants mapped to business rules",
+          "additionalProperties": {
+            "$ref": "#/definitions/InvariantMapping"
+          }
+        }
+      }
+    },
+    "ActionMapping": {
+      "type": "object",
+      "required": ["codeFile", "method"],
+      "properties": {
+        "codeFile": {
+          "type": "string",
+          "description": "Path to source file (relative to project root)"
+        },
+        "method": {
+          "type": "string",
+          "description": "Method/function name"
+        },
+        "line": {
+          "type": "integer",
+          "description": "Line number (for quick navigation)"
+        },
+        "description": {
+          "type": "string",
+          "description": "How this action maps to the code"
+        },
+        "preconditions": {
+          "type": "array",
+          "description": "Guard conditions in the action",
+          "items": { "type": "string" }
+        },
+        "postconditions": {
+          "type": "array",
+          "description": "State changes in the action",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "VariableMapping": {
+      "type": "object",
+      "properties": {
+        "table": {
+          "type": "string",
+          "description": "Database table name"
+        },
+        "column": {
+          "type": "string",
+          "description": "Column name"
+        },
+        "entity": {
+          "type": "string",
+          "description": "Entity/model class"
+        },
+        "property": {
+          "type": "string",
+          "description": "Property name on entity"
+        },
+        "derivation": {
+          "type": "string",
+          "description": "How the TLA+ variable is derived from code state"
+        }
+      }
+    },
+    "InvariantMapping": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "What property this invariant enforces"
+        },
+        "businessRule": {
+          "type": "string",
+          "description": "Business rule this corresponds to"
+        },
+        "testMethod": {
+          "type": "string",
+          "description": "Test method that verifies this invariant"
+        }
+      }
+    }
+  }
+}
