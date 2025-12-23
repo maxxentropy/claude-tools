@@ -141,7 +141,96 @@ All commands support:
 - `--table` - Tabular output
 - `--verbose, -v` - Detailed output
 
+## Cross-Repo Global Store
+
+The findings system supports a **global store** that aggregates findings across all your repositories.
+This enables cross-project pattern discovery and search.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      TWO-TIER ARCHITECTURE                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   Per-Repo (Local)                    Global (Centralized)       │
+│   ─────────────────                   ────────────────────       │
+│   .findings/findings.jsonl            ~/.claude/findings/        │
+│   - Git-tracked                       - NOT git-tracked          │
+│   - Team-visible                      - Personal aggregation     │
+│   - Repo-specific                     - Cross-repo patterns      │
+│                                                                  │
+│        ┌──────────┐                       ┌──────────────┐       │
+│        │ repo-a/  │ ───push──────────────►│              │       │
+│        │ findings │                       │    global    │       │
+│        └──────────┘                       │   findings   │       │
+│        ┌──────────┐                       │    store     │       │
+│        │ repo-b/  │ ───push──────────────►│              │       │
+│        │ findings │                       │              │       │
+│        └──────────┘                       └──────────────┘       │
+│                                                  │               │
+│        Any Repo ◄────────────────cross-repo search               │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Global Store Commands
+
+```bash
+# Push local findings to global store
+python3 query_findings.py --push-to-global
+
+# Query global store (all repos)
+python3 query_findings.py --global
+
+# Search across all repositories
+python3 query_findings.py --all-repos --search "N+1 query"
+
+# Find similar findings across repos
+python3 query_findings.py --similar "N+1 query in OrderService"
+
+# Filter by source repo
+python3 query_findings.py --global --from-repo "my-project"
+```
+
+### sync_findings.py
+
+Dedicated script for sync operations:
+
+| Command | Description |
+|---------|-------------|
+| `--push` | Push all local findings to global |
+| `--push --id f-abc123` | Push specific finding |
+| `--repos` | List all registered repositories |
+| `--status` | Show sync status for current repo |
+| `--stats` | Show global statistics |
+| `--search "term"` | Search across all repos |
+| `--similar "text"` | Find similar findings |
+| `--global` | Query global findings |
+| `--global --open` | Query open global findings |
+
+### Privacy
+
+Findings with `private` tag are not synced to global:
+
+```bash
+# This finding stays local only
+python3 query_findings.py --capture \
+  --title "Internal investigation notes" \
+  --tags private sensitive
+```
+
+Configure privacy in `~/.claude/findings/config.json`:
+
+```json
+{
+  "privacy": {
+    "exclude_tags": ["private", "sensitive", "personal"]
+  }
+}
+```
+
 ## Storage
+
+### Local (Per-Repo)
 
 ```
 .findings/
@@ -149,6 +238,16 @@ All commands support:
 ├── index.json            # Git-ignored (fast lookup cache)
 ├── session-context.json  # Git-ignored (current session state)
 └── .gitignore           # Excludes local files
+```
+
+### Global (Cross-Repo)
+
+```
+~/.claude/findings/
+├── global-findings.jsonl  # All synced findings
+├── index.json             # Fast lookup cache
+├── repositories.json      # Registry of known repos
+└── config.json            # Sync and privacy settings
 ```
 
 ### findings.jsonl Format

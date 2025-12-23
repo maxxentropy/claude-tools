@@ -118,6 +118,17 @@ class Finding:
     created_at: str = ""
     updated_at: str = ""
 
+    # === NEW: Global/Cross-Repo Fields ===
+    # Global identity (for cross-repo tracking)
+    global_id: Optional[str] = None  # Set when synced to global store
+
+    # Source tracking (populated when synced FROM another repo)
+    source_repo: Optional[str] = None       # e.g., "claude-tools"
+    source_repo_path: Optional[str] = None  # e.g., "/Users/sean/source/tools/claude-tools"
+
+    # Visibility control
+    visibility: str = "local"  # local, global, private
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         d = asdict(self)

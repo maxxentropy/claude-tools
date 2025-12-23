@@ -34,6 +34,13 @@ from findings_store import (
     FINDING_TYPES, SEVERITIES, CATEGORIES
 )
 
+# Try to import global store (may not exist in older installations)
+try:
+    from global_store import GlobalStore, GlobalFinding, get_repo_name_from_path
+    HAS_GLOBAL_STORE = True
+except ImportError:
+    HAS_GLOBAL_STORE = False
+
 
 class Colors:
     """ANSI color codes."""
@@ -156,6 +163,47 @@ def format_table(findings: List[Finding]) -> str:
         lines.append(
             f"{f.id:<12} {f.severity:<8} {f.status:<10} {f.finding_type:<12} {title:<40}"
         )
+
+    return "\n".join(lines)
+
+
+def format_global_finding(finding, verbose: bool = False) -> str:
+    """Format a global finding for display."""
+    lines = []
+
+    # Header with global ID and source repo
+    lines.append(
+        f"{color(finding.global_id, Colors.CYAN, Colors.BOLD)} "
+        f"[{color(finding.source_repo, Colors.MAGENTA)}] "
+        f"[{color(finding.severity, Colors.YELLOW)}]"
+    )
+
+    # Title
+    lines.append(f"  {color(finding.title, Colors.WHITE, Colors.BOLD)}")
+
+    # Local ID reference
+    lines.append(f"  {color('Local ID:', Colors.DIM)} {finding.id}")
+
+    if verbose:
+        # Location
+        if finding.file_path:
+            loc = finding.file_path
+            if finding.line_number:
+                loc += f":{finding.line_number}"
+            lines.append(f"  {color('Location:', Colors.DIM)} {loc}")
+
+        # Description
+        if finding.description:
+            lines.append(f"  {color('Description:', Colors.DIM)}")
+            for line in finding.description.split("\n")[:3]:
+                lines.append(f"    {line[:80]}")
+
+        # Tags
+        if finding.tags:
+            lines.append(f"  {color('Tags:', Colors.DIM)} {', '.join(finding.tags)}")
+
+        # Repo path
+        lines.append(f"  {color('Repo:', Colors.DIM)} {finding.source_repo_path}")
 
     return "\n".join(lines)
 
@@ -410,8 +458,121 @@ Examples:
         help="Filter by tag"
     )
 
+    # Global store options
+    global_group = parser.add_argument_group("Global Store (Cross-Repo)")
+    global_group.add_argument(
+        "--global", dest="query_global", action="store_true",
+        help="Query the global store (all repos)"
+    )
+    global_group.add_argument(
+        "--all-repos", action="store_true",
+        help="Search across all repositories"
+    )
+    global_group.add_argument(
+        "--push-to-global", action="store_true",
+        help="Push current repo findings to global store"
+    )
+    global_group.add_argument(
+        "--similar", type=str, metavar="TEXT",
+        help="Find similar findings across all repos"
+    )
+    global_group.add_argument(
+        "--from-repo", type=str, metavar="REPO",
+        help="Filter by source repository (use with --global)"
+    )
+
     args = parser.parse_args()
     store = FindingsStore(use_sqlite_cache=args.use_sqlite)
+
+    # ==================== Global Store Operations ====================
+
+    # Handle --global (query global store)
+    if args.query_global or args.all_repos or args.similar or args.push_to_global:
+        if not HAS_GLOBAL_STORE:
+            print(color("Error: Global store not available. Ensure global_store.py exists.", Colors.RED))
+            sys.exit(1)
+
+        global_store = GlobalStore()
+        repo_name = get_repo_name_from_path(store.root_dir)
+        repo_path = str(store.root_dir)
+
+        # Handle --push-to-global
+        if args.push_to_global:
+            findings_to_push = store.query_findings(limit=1000)
+            if not findings_to_push:
+                print(color("No findings to push.", Colors.DIM))
+                sys.exit(0)
+
+            synced = 0
+            skipped = 0
+            for finding in findings_to_push:
+                if "private" in finding.tags:
+                    skipped += 1
+                    continue
+
+                global_id = global_store.sync_finding(
+                    finding_data=finding.to_dict(),
+                    source_repo=repo_name,
+                    source_repo_path=repo_path
+                )
+                if global_id:
+                    synced += 1
+                    if not finding.global_id:
+                        store.update_finding(finding.id, global_id=global_id)
+
+            if args.json:
+                print(json.dumps({"synced": synced, "skipped": skipped, "repo": repo_name}))
+            else:
+                print(color(f"Synced {synced} findings to global store", Colors.GREEN))
+                if skipped:
+                    print(color(f"  Skipped {skipped} private findings", Colors.DIM))
+            sys.exit(0)
+
+        # Handle --similar
+        if args.similar:
+            results = global_store.find_similar(args.similar)
+            if args.json:
+                print(json.dumps([
+                    {"finding": f.to_dict(), "similarity": s}
+                    for f, s in results[:args.limit]
+                ], indent=2))
+            else:
+                if not results:
+                    print(color("No similar findings found.", Colors.DIM))
+                else:
+                    print(color(f"Found {len(results)} similar finding(s):", Colors.BOLD))
+                    print()
+                    for finding, score in results[:args.limit]:
+                        print(f"{color(f'{score:.0%}', Colors.GREEN)} match:")
+                        print(format_global_finding(finding, verbose=args.verbose))
+                        print()
+            sys.exit(0)
+
+        # Handle --global or --all-repos
+        status_filter = "open" if args.open else args.status
+        search_term = args.search if args.all_repos else None
+
+        results = global_store.query_findings(
+            source_repo=args.from_repo,
+            status=status_filter,
+            search=search_term,
+            limit=args.limit
+        )
+
+        if args.json:
+            print(json.dumps([f.to_dict() for f in results], indent=2))
+        else:
+            if not results:
+                print(color("No global findings found.", Colors.DIM))
+            else:
+                print(color(f"Found {len(results)} global finding(s):", Colors.BOLD))
+                print()
+                for finding in results:
+                    print(format_global_finding(finding, verbose=args.verbose))
+                    print()
+        sys.exit(0)
+
+    # ==================== Local Store Operations ====================
 
     # Handle capture
     if args.capture:
